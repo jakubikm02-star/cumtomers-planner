@@ -224,15 +224,16 @@
             const tbody = document.getElementById('plan-body');
             tbody.innerHTML = '';
             
+            // Only workdays Mon–Fri
             const weekDates = [];
-            for (let i = 0; i < 7; i++) {
+            for (let i = 0; i < 5; i++) {
                 const d = new Date(currentWeekStart);
                 d.setDate(d.getDate() + i);
                 weekDates.push(d);
             }
             
             document.getElementById('week-label').textContent = 
-                formatDate(weekDates[0]) + ' - ' + formatDate(weekDates[6]);
+                formatDate(weekDates[0]) + ' - ' + formatDate(weekDates[4]) + ' (Po–Pi)';
             
             const slots = ['6-8', '8-10', '10-12', '12-14', '14-16', '16-18', '18+'];
             
@@ -298,8 +299,8 @@
                     dateHeader.innerHTML = `
                         <td colspan="7" class="py-2 px-3 font-bold text-orange-400 text-sm border-b border-zinc-600 flex justify-between items-center">
                             <span><i class="fa-solid fa-calendar-day mr-2"></i> ${formattedDate}</span>
-                            <button onclick="printDay('${item.date}')" class="text-[10px] bg-zinc-700 hover:bg-zinc-600 text-orange-400 px-2 py-[1px] rounded font-medium border border-zinc-600">
-                                Tlačiť
+                            <button onclick="printDay('${item.date}')" class="text-[9px] bg-zinc-800 hover:bg-zinc-700 text-orange-400 px-1.5 py-0 rounded border border-zinc-600 flex items-center gap-x-1">
+                                <i class="fa-solid fa-print text-[8px]"></i> <span>Tlačiť</span>
                             </button>
                         </td>
                     `;
@@ -330,6 +331,59 @@
                 planData[key] = planData[key].filter(i => i.id != id);
             });
             renderPlan();
+        }
+
+        // Print clean list for one day only
+        function printDay(date) {
+            const items = [];
+            Object.keys(planData).forEach(key => {
+                if (key.startsWith(date)) {
+                    planData[key].forEach(item => items.push({ ...item, date }));
+                }
+            });
+            
+            items.sort((a, b) => a.time.localeCompare(b.time));
+            
+            let html = `
+                <html>
+                <head>
+                    <title>Rozpis ${date}</title>
+                    <style>
+                        body { font-family: system-ui, sans-serif; padding: 30px; font-size: 14px; }
+                        h1 { font-size: 20px; margin-bottom: 20px; color: #ff9000; }
+                        .item { margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid #eee; }
+                        .time { font-weight: bold; color: #ff9000; }
+                        .customer { font-weight: 600; }
+                    </style>
+                </head>
+                <body>
+                    <h1>Rozpis na ${date.split('-').reverse().join('.')}</h1>
+            `;
+            
+            if (items.length === 0) {
+                html += `<p>Žiadne výjazdy na tento deň.</p>`;
+            } else {
+                items.forEach(item => {
+                    html += `
+                        <div class="item">
+                            <div><span class="time">${item.time}</span> — <span class="customer">${item.customer}</span></div>
+                            <div style="color:#555; font-size:13px;">${item.address || ''}</div>
+                            <div style="margin-top:4px; font-size:13px;">${item.note || ''}</div>
+                            <div style="margin-top:4px; font-size:12px; color:#888;">
+                                Ticket: ${item.ticket} | ${item.color === 'red' ? '5G' : item.color === 'yellow' ? 'Optika' : item.color === 'green' ? 'Jednoduchá' : 'FTTB'}
+                            </div>
+                        </div>
+                    `;
+                });
+            }
+            
+            html += `</body></html>`;
+            
+            const w = window.open('', '_blank');
+            w.document.write(html);
+            w.document.close();
+            w.focus();
+            setTimeout(() => w.print(), 400);
         }
 
         function addNewPlanItem() {
