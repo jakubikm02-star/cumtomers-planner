@@ -482,7 +482,27 @@
             const tbody = document.getElementById('pending-calls-list');
             tbody.innerHTML = '';
 
-            pendingCalls.forEach(item => {
+            // Sort by date
+            const sorted = [...pendingCalls].sort((a,b) => a.date.localeCompare(b.date));
+            
+            let currentDate = null;
+            
+            sorted.forEach(item => {
+                // Add date header
+                if (item.date !== currentDate) {
+                    currentDate = item.date;
+                    const formatted = item.date.split('-').reverse().join('.');
+                    
+                    const header = document.createElement('tr');
+                    header.className = 'bg-zinc-800';
+                    header.innerHTML = `
+                        <td colspan="7" class="py-1.5 px-3 font-bold text-yellow-400 text-xs border-b border-zinc-600">
+                            <i class="fa-solid fa-calendar mr-2"></i> ${formatted}
+                        </td>
+                    `;
+                    tbody.appendChild(header);
+                }
+                
                 const tr = document.createElement('tr');
                 tr.className = 'border-b border-zinc-700 hover:bg-zinc-800';
                 
@@ -491,7 +511,7 @@
                 if (item.status === 'Odložené') statusColor = 'bg-zinc-500/20 text-zinc-400';
 
                 tr.innerHTML = `
-                    <td class="py-2 font-mono">${item.date}</td>
+                    <td class="py-2 font-mono pl-3">${item.date}</td>
                     <td>${item.person}</td>
                     <td class="font-mono text-xs">${item.phone}</td>
                     <td>${item.reason}</td>
