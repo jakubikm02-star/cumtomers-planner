@@ -3,19 +3,133 @@
 <html lang="sk">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#0a0a0a">
+    <meta name="mobile-web-app-capable" content="yes">
     <title>OTRS Organizér • Katona Tamás - Týždenný plán</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600&amp;family=Roboto:wght@500;700&amp;display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600&family=Roboto:wght@500;700&display=swap');
         
         body { 
             font-family: 'Inter', system-ui, -apple-system, sans-serif; 
             background: #0a0a0a;
             color: #f1f1f1;
         }
-        
+
+        /* ============================================================
+           MOBILNÁ VRSTVA — aktivuje sa len pod 768px.
+           Nič v tejto sekcii sa netýka PC zobrazenia (nad 768px ostáva
+           pôvodný layout 1:1 nezmenený).
+        ============================================================ */
+        @media (max-width: 768px) {
+            body { padding: 0.75rem !important; font-size: 15px; }
+
+            /* Header sa zalomí na 2 riadky, tlačidlá pod logo */
+            .pornhub-header {
+                flex-direction: column;
+                align-items: stretch;
+                gap: 0.75rem;
+                padding: 1rem !important;
+                margin-left: -0.75rem !important;
+                margin-right: -0.75rem !important;
+                margin-top: -0.75rem !important;
+            }
+            .pornhub-header .flex.items-center.gap-x-4 { gap: 0.75rem; }
+            .pornhub-header span[style*="font-size: 42px"] { font-size: 28px !important; letter-spacing: -1px !important; }
+
+            .pornhub-header > .flex.items-center.gap-x-3 {
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 0.5rem;
+                width: 100%;
+            }
+            .pornhub-header > .flex.items-center.gap-x-3 > #week-label {
+                grid-column: 1 / -1;
+                text-align: center;
+            }
+            .pornhub-header button, .pornhub-header #week-label {
+                width: 100%;
+                justify-content: center;
+                padding: 0.6rem 0.5rem;
+                font-size: 12.5px;
+                white-space: nowrap;
+            }
+
+            /* Týždenná tabuľka: na mobile sa horizontálne tabuľky s 8 kolónkami
+               nedajú použiť - prepneme na vertikálny zoznam dní s kartami */
+            #plan-table thead { display: none; }
+            #plan-table, #plan-table tbody, #plan-table tr, #plan-table td {
+                display: block;
+                width: 100% !important;
+                border: none;
+            }
+            #plan-table tr {
+                margin-bottom: 0.75rem;
+                background: #141414;
+                border: 1px solid #333;
+                border-radius: 0.75rem;
+                overflow: hidden;
+            }
+            #plan-table td:first-child {
+                font-size: 14px;
+                padding: 0.6rem 0.8rem;
+                background: #1f1f1f;
+            }
+            #plan-table td.plan-slot { min-height: unset; border: none; border-top: 1px solid #262626; }
+            #plan-table td.plan-slot:empty { display: none; }
+            /* Skry prázdne sloty na mobile, aby karta nebola plná prázdneho miesta */
+            #plan-table td.plan-slot[data-empty="1"] { display: none; }
+            #plan-table td.plan-slot::before {
+                content: attr(data-slot-label);
+                display: block;
+                font-size: 10px;
+                color: #ff9000;
+                font-weight: 700;
+                letter-spacing: 0.5px;
+                margin-bottom: 4px;
+            }
+
+            /* Detailný zoznam a "na zavolanie": skry tabuľkový header, presuň na karty */
+            #detail-list, #pending-calls-list { display: block; width: 100%; }
+            #detail-list tr:not(.bg-zinc-800), #pending-calls-list tr:not(.bg-zinc-800) {
+                display: grid;
+                grid-template-columns: 1fr;
+                gap: 0.2rem;
+                padding: 0.75rem 0.5rem;
+                background: #141414;
+                border: 1px solid #2a2a2a;
+                border-radius: 0.6rem;
+                margin-bottom: 0.5rem;
+            }
+            #detail-list tr.bg-zinc-800, #pending-calls-list tr.bg-zinc-800 { border-radius: 0.5rem; margin-top: 0.5rem; }
+            #detail-list td, #pending-calls-list td { display: block; border: none; padding: 0.1rem 0 !important; }
+            #detail-list td:empty, #pending-calls-list td:empty { display: none; }
+            #detail-list table thead, #pending-calls-list table thead,
+            .bg-zinc-900.border.border-zinc-700.rounded-xl.p-5 > table > thead { display: none; }
+
+            #detail-list td.font-mono.text-blue-400::before { content: "🎫 "; }
+            #detail-list td.text-xs.text-zinc-400::before { content: "📍 "; }
+            #detail-list td.font-mono:not(.text-blue-400)::before { content: "🕐 "; }
+
+            /* Modálne okná: celá výška, scroll, väčšie dotykové ciele (Samsung Internet) */
+            .fixed.inset-0 { padding: 0.75rem; }
+            .fixed.inset-0 > div {
+                max-height: min(90vh, 90dvh);
+                overflow-y: auto;
+                width: 100%;
+                max-width: 100%;
+            }
+            .fixed.inset-0 input, .fixed.inset-0 select, .fixed.inset-0 textarea, .fixed.inset-0 button {
+                font-size: 16px; /* zabráni auto-zoomu pri focuse na iOS/Android */
+            }
+            .grid.grid-cols-2.gap-4 { grid-template-columns: 1fr 1fr; gap: 0.6rem; }
+
+            /* Sync status pill v hlavičke */
+            #sync-status-bar { font-size: 11px; }
+        }
+
         .pornhub-header {
             background: #000000;
             border-bottom: 4px solid #ff9000;
@@ -81,6 +195,9 @@
                 <div class="text-sm">
                     <div class="text-white font-bold">Týždenný plán výjazdov <span class="text-xs bg-zinc-800 px-1.5 py-0.5 rounded align-middle">v1.4</span></div>
                     <div style="color: #ff9000; font-size: 13px;">Katona Tamás • SWAN Edition</div>
+                    <div id="sync-status-bar" class="text-xs mt-0.5 flex items-center gap-x-1.5 text-zinc-500">
+                        <i class="fa-solid fa-circle-notch fa-spin"></i> <span id="sync-status-text">Pripájam sa...</span>
+                    </div>
                 </div>
             </div>
             
@@ -94,6 +211,9 @@
                 </button>
                 <button onclick="window.print()" class="px-4 py-2 bg-zinc-700 hover:bg-zinc-600 rounded text-sm font-semibold flex items-center gap-x-2">
                     <i class="fa-solid fa-print"></i> <span>Vytlačiť</span>
+                </button>
+                <button onclick="showSyncSetupModal()" class="px-4 py-2 bg-zinc-800 border border-zinc-600 rounded text-sm flex items-center gap-x-2" title="Nastavenie zdieľaného úložiska">
+                    <i class="fa-solid fa-cloud"></i> <span>Sync</span>
                 </button>
                 <button onclick="showImportModal()" class="ph-button px-4 py-2 rounded text-sm font-bold flex items-center gap-x-2">
                     <i class="fa-solid fa-paste"></i> <span>Prilepiť dump z Customers</span>
@@ -236,7 +356,8 @@
                 formatDate(weekDates[0]) + ' - ' + formatDate(weekDates[4]) + ' (Po–Pi)';
             
             const slots = ['6-8', '8-10', '10-12', '12-14', '14-16', '16-18', '18+'];
-            
+            const slotLabels = {'6-8':'6:00–8:00','8-10':'8:00–10:00','10-12':'10:00–12:00','12-14':'12:00–14:00','14-16':'14:00–16:00','16-18':'16:00–18:00','18+':'Po 18:00'};
+
             weekDates.forEach(date => {
                 const dateStr = date.toISOString().split('T')[0];
                 let row = `<td class="font-mono font-semibold bg-zinc-800">${formatDate(date)}</td>`;
@@ -245,7 +366,7 @@
                     const key = `${dateStr}_${slot}`;
                     const items = planData[key] || [];
                     
-                    let cell = `<td class="plan-slot">`;
+                    let cell = `<td class="plan-slot" data-slot-label="${slotLabels[slot]}" ${items.length === 0 ? 'data-empty="1"' : ''}>`;
                     items.forEach(item => {
                         const colorClass = item.color === 'red' ? 'border-red-500' : 
                                           item.color === 'yellow' ? 'border-yellow-500' : 
@@ -685,20 +806,7 @@
             renderPendingCalls();
         }
 
-        // Init
-        function init() {
-            renderPlan();
-            renderPendingCalls();
-            
-            document.addEventListener('keydown', function(e) {
-                if (e.key === "?") {
-                    addNewPlanItem();
-                    e.preventDefault();
-                }
-            });
-            
-            console.log('%c[OTRS] Katona planner + Pending calls ready.', 'color:#666');
-        }
+        // (funkcia init je definovaná nižšie, po pridaní exportCurrentState)
         
         // ==================== IMPORT Z CUSTOMERS / SWAN ====================
         function showImportModal() {
@@ -809,12 +917,189 @@
             alert(`Spracované! Pridaných ${added} výjazdov z dumpu.`);
         }
 
-        // Ukladanie dát
+        // ==================== ZDIEĽANÉ ÚLOŽISKO (jsonbin.io) ====================
+        // Funguje takto: PC aj mobil ukladajú/čítajú ten istý "bin" (JSON súbor)
+        // na jsonbin.io. Bin ID + API kľúč sa nastaví RAZ na každom zariadení
+        // (tlačidlo "Sync" v hlavičke) a uloží sa do localStorage daného zariadenia.
+        // Dovtedy funguje appka normálne len lokálne (ako predtým).
+        const SYNC_API_BASE = 'https://api.jsonbin.io/v3/b';
+        let syncBinId = localStorage.getItem('cumtomers_bin_id') || '';
+        let syncApiKey = localStorage.getItem('cumtomers_api_key') || '';
+        let syncInProgress = false;
+        let syncPushTimer = null;
+        let lastSyncedHash = '';
+        let suppressNextPush = false;
+
+        function setSyncStatus(state, text) {
+            const dot = document.querySelector('#sync-status-bar i');
+            const label = document.getElementById('sync-status-text');
+            if (!dot || !label) return;
+            label.textContent = text;
+            dot.className = state === 'ok' ? 'fa-solid fa-circle text-emerald-500' :
+                             state === 'error' ? 'fa-solid fa-triangle-exclamation text-red-500' :
+                             state === 'offline' ? 'fa-solid fa-circle text-zinc-500' :
+                             'fa-solid fa-circle-notch fa-spin text-zinc-400';
+        }
+
+        function hashState() {
+            return JSON.stringify({planData, pendingCalls}).length + ':' + JSON.stringify({planData, pendingCalls}).slice(0,40);
+        }
+
+        function showSyncSetupModal() {
+            const modal = document.createElement('div');
+            modal.className = 'fixed inset-0 bg-black/70 flex items-center justify-center z-[200]';
+            modal.innerHTML = `
+                <div class="bg-zinc-900 border border-zinc-700 rounded-2xl w-full max-w-lg p-6" onclick="event.stopImmediatePropagation()">
+                    <div class="font-bold text-xl mb-3 flex items-center gap-x-3">
+                        <i class="fa-solid fa-cloud text-orange-400"></i>
+                        <span>Zdieľané úložisko (PC ↔ Mobil)</span>
+                    </div>
+                    <div class="text-xs text-zinc-400 mb-4 leading-relaxed">
+                        Na <b>prvom zariadení</b> klikni "Vytvoriť nové úložisko". Dostaneš Bin ID.<br>
+                        Na <b>druhom zariadení</b> (mobil/PC) sem vlož to isté Bin ID a API kľúč a klikni "Pripojiť".
+                    </div>
+                    <div class="space-y-3">
+                        <div>
+                            <label class="text-xs text-zinc-400 block mb-1">API kľúč (jsonbin.io X-Master-Key)</label>
+                            <input type="text" id="sync-api-key" value="${syncApiKey}" placeholder="vlož API kľúč z jsonbin.io" class="bg-zinc-950 border border-zinc-700 w-full p-2.5 rounded-xl font-mono text-xs">
+                        </div>
+                        <div>
+                            <label class="text-xs text-zinc-400 block mb-1">Bin ID</label>
+                            <input type="text" id="sync-bin-id" value="${syncBinId}" placeholder="napr. 666abc123..." class="bg-zinc-950 border border-zinc-700 w-full p-2.5 rounded-xl font-mono text-xs">
+                        </div>
+                    </div>
+                    <div id="sync-modal-msg" class="text-xs mt-3"></div>
+                    <div class="flex gap-x-3 mt-5">
+                        <button onclick="this.closest('.fixed').remove()" class="flex-1 py-2.5 border border-zinc-600 rounded-xl hover:bg-zinc-800">Zavrieť</button>
+                        <button onclick="createNewBin(this)" class="flex-1 py-2.5 bg-zinc-700 hover:bg-zinc-600 text-sm font-bold rounded-xl">Vytvoriť nové</button>
+                        <button onclick="connectToBin(this)" class="flex-1 py-2.5 bg-orange-500 hover:bg-orange-400 text-black text-sm font-bold rounded-xl">Pripojiť</button>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(modal);
+        }
+
+        async function createNewBin(btn) {
+            const apiKey = document.getElementById('sync-api-key').value.trim();
+            const msg = document.getElementById('sync-modal-msg');
+            if (!apiKey) { msg.innerHTML = '<span class="text-red-400">Vlož API kľúč (zaregistruj sa zdarma na jsonbin.io a skopíruj X-Master-Key).</span>'; return; }
+            msg.innerHTML = '<span class="text-zinc-400">Vytváram...</span>';
+            try {
+                const res = await fetch(SYNC_API_BASE, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Master-Key': apiKey,
+                        'X-Bin-Name': 'cumtomers-planner-data'
+                    },
+                    body: JSON.stringify({ planData, pendingCalls, savedAt: new Date().toISOString() })
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.message || 'Chyba pri vytváraní');
+                syncBinId = data.metadata.id;
+                syncApiKey = apiKey;
+                localStorage.setItem('cumtomers_bin_id', syncBinId);
+                localStorage.setItem('cumtomers_api_key', syncApiKey);
+                document.getElementById('sync-bin-id').value = syncBinId;
+                msg.innerHTML = `<span class="text-emerald-400">Vytvorené! Bin ID: <b>${syncBinId}</b><br>Skopíruj API kľúč aj toto ID na druhé zariadenie (tlačidlo Sync → vlož → Pripojiť).</span>`;
+                setSyncStatus('ok', 'Pripojené (zdroj)');
+                startSyncPolling();
+            } catch (e) {
+                msg.innerHTML = `<span class="text-red-400">Zlyhalo: ${e.message}</span>`;
+            }
+        }
+
+        async function connectToBin(btn) {
+            const apiKey = document.getElementById('sync-api-key').value.trim();
+            const binId = document.getElementById('sync-bin-id').value.trim();
+            const msg = document.getElementById('sync-modal-msg');
+            if (!apiKey || !binId) { msg.innerHTML = '<span class="text-red-400">Vlož API kľúč aj Bin ID.</span>'; return; }
+            msg.innerHTML = '<span class="text-zinc-400">Pripájam...</span>';
+            try {
+                const res = await fetch(`${SYNC_API_BASE}/${binId}/latest`, { headers: { 'X-Master-Key': apiKey } });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.message || 'Bin sa nenašiel');
+                syncBinId = binId;
+                syncApiKey = apiKey;
+                localStorage.setItem('cumtomers_bin_id', syncBinId);
+                localStorage.setItem('cumtomers_api_key', syncApiKey);
+                if (data.record && data.record.planData) {
+                    planData = data.record.planData;
+                    pendingCalls = data.record.pendingCalls || [];
+                    suppressNextPush = true;
+                    renderPlan();
+                    renderPendingCalls();
+                }
+                msg.innerHTML = '<span class="text-emerald-400">Pripojené! Dáta stiahnuté.</span>';
+                setSyncStatus('ok', 'Pripojené');
+                startSyncPolling();
+                setTimeout(() => document.querySelector('.fixed.inset-0')?.remove(), 1200);
+            } catch (e) {
+                msg.innerHTML = `<span class="text-red-400">Zlyhalo: ${e.message}</span>`;
+            }
+        }
+
+        async function pushToCloud() {
+            if (!syncBinId || !syncApiKey) return;
+            if (suppressNextPush) { suppressNextPush = false; return; }
+            syncInProgress = true;
+            setSyncStatus('loading', 'Ukladám...');
+            try {
+                const res = await fetch(`${SYNC_API_BASE}/${syncBinId}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json', 'X-Master-Key': syncApiKey },
+                    body: JSON.stringify({ planData, pendingCalls, savedAt: new Date().toISOString() })
+                });
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                lastSyncedHash = hashState();
+                setSyncStatus('ok', 'Synchronizované');
+            } catch (e) {
+                setSyncStatus('error', 'Chyba ukladania (offline?)');
+            } finally {
+                syncInProgress = false;
+            }
+        }
+
+        async function pullFromCloud(silent) {
+            if (!syncBinId || !syncApiKey) { setSyncStatus('offline', 'Nepripojené — klikni Sync'); return; }
+            if (!silent) setSyncStatus('loading', 'Sťahujem...');
+            try {
+                const res = await fetch(`${SYNC_API_BASE}/${syncBinId}/latest`, { headers: { 'X-Master-Key': syncApiKey } });
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                const data = await res.json();
+                const incomingHash = JSON.stringify({planData: data.record.planData, pendingCalls: data.record.pendingCalls}).length + ':' +
+                                      JSON.stringify({planData: data.record.planData, pendingCalls: data.record.pendingCalls}).slice(0,40);
+                if (data.record && incomingHash !== lastSyncedHash && incomingHash !== hashState()) {
+                    planData = data.record.planData || planData;
+                    pendingCalls = data.record.pendingCalls || pendingCalls;
+                    lastSyncedHash = incomingHash;
+                    suppressNextPush = true;
+                    renderPlan();
+                    renderPendingCalls();
+                }
+                setSyncStatus('ok', 'Synchronizované');
+            } catch (e) {
+                setSyncStatus('error', 'Chyba pripojenia');
+            }
+        }
+
+        function startSyncPolling() {
+            pullFromCloud(true);
+            setInterval(() => pullFromCloud(true), 15000); // kontrola zmien z druhého zariadenia každých 15s
+        }
+
+        function queuePush() {
+            clearTimeout(syncPushTimer);
+            syncPushTimer = setTimeout(pushToCloud, 1200); // debounce — neukladá po každom písmene
+        }
+
+        // Ukladanie dát — lokálne okamžite (rýchle UI) + cloud (zdieľané medzi zariadeniami)
         function saveAllData() {
             try {
                 localStorage.setItem('cumtomers_planData', JSON.stringify(planData));
                 localStorage.setItem('cumtomers_pendingCalls', JSON.stringify(pendingCalls));
             } catch(e){}
+            queuePush();
         }
 
         function loadAllData() {
@@ -851,16 +1136,29 @@
             loadAllData();
             renderPlan();
             renderPendingCalls();
-            
+
+            document.addEventListener('keydown', function(e) {
+                if (e.key === "?") {
+                    addNewPlanItem();
+                    e.preventDefault();
+                }
+            });
+
             const origPlan = renderPlan;
             renderPlan = function(){ origPlan(); saveAllData(); };
-            
+
             const origPend = renderPendingCalls;
             renderPendingCalls = function(){ origPend(); saveAllData(); };
-            
-            console.log('%c[CUMTOMERS] Vlastné ukladanie aktívne (localStorage + JSON zálohy).', 'color:#ff9000');
+
+            if (syncBinId && syncApiKey) {
+                startSyncPolling();
+            } else {
+                setSyncStatus('offline', 'Nepripojené — klikni Sync');
+            }
+
+            console.log('%c[CUMTOMERS] Ready. Sync: ' + (syncBinId ? 'pripojené' : 'lokálne len'), 'color:#ff9000');
         }
-        
+
         window.onload = init;
     </script>
 </body>
