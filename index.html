@@ -285,19 +285,22 @@
             // Sort by date + time
             allItems.sort((a,b) => (a.date + a.time).localeCompare(b.date + b.time));
             
-            // Group by date with headers
+            // Group by date with print button
             let currentDate = null;
             
             allItems.forEach(item => {
                 if (item.date !== currentDate) {
                     currentDate = item.date;
+                    const formattedDate = item.date.split('-').reverse().join('.');
                     
                     const dateHeader = document.createElement('tr');
                     dateHeader.className = 'bg-zinc-800';
-                    const formattedDate = item.date.split('-').reverse().join('.');
                     dateHeader.innerHTML = `
-                        <td colspan="7" class="py-2 px-3 font-bold text-orange-400 text-sm border-b border-zinc-600">
-                            <i class="fa-solid fa-calendar-day mr-2"></i> ${formattedDate}
+                        <td colspan="7" class="py-2 px-3 font-bold text-orange-400 text-sm border-b border-zinc-600 flex justify-between items-center">
+                            <span><i class="fa-solid fa-calendar-day mr-2"></i> ${formattedDate}</span>
+                            <button onclick="printDay('${item.date}')" class="text-[10px] bg-zinc-700 hover:bg-zinc-600 text-orange-400 px-2 py-[1px] rounded font-medium border border-zinc-600">
+                                Tlačiť
+                            </button>
                         </td>
                     `;
                     tbody.appendChild(dateHeader);
