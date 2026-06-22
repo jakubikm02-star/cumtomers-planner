@@ -212,6 +212,9 @@
                 <button onclick="window.print()" class="px-4 py-2 bg-zinc-700 hover:bg-zinc-600 rounded text-sm font-semibold flex items-center gap-x-2">
                     <i class="fa-solid fa-print"></i> <span>Vytlačiť</span>
                 </button>
+                <button onclick="manualRefresh(this)" class="px-4 py-2 bg-zinc-800 border border-zinc-600 rounded text-sm flex items-center gap-x-2" title="Stiahnuť najnovšie dáta z druhého zariadenia">
+                    <i class="fa-solid fa-arrows-rotate"></i> <span>Obnoviť</span>
+                </button>
                 <button onclick="showSyncSetupModal()" class="px-4 py-2 bg-zinc-800 border border-zinc-600 rounded text-sm flex items-center gap-x-2" title="Nastavenie zdieľaného úložiska">
                     <i class="fa-solid fa-cloud"></i> <span>Sync</span>
                 </button>
@@ -1084,8 +1087,20 @@
         }
 
         function startSyncPolling() {
-            pullFromCloud(true);
-            setInterval(() => pullFromCloud(true), 15000); // kontrola zmien z druhého zariadenia každých 15s
+            pullFromCloud(true); // jedno stiahnutie pri pripojení/načítaní stránky, ďalej len manuálne tlačidlom "Obnoviť"
+        }
+
+        async function manualRefresh(btn) {
+            if (!syncBinId || !syncApiKey) {
+                setSyncStatus('offline', 'Nepripojené — klikni Sync');
+                return;
+            }
+            const icon = btn.querySelector('i');
+            icon.classList.add('fa-spin');
+            btn.disabled = true;
+            await pullFromCloud(false);
+            icon.classList.remove('fa-spin');
+            btn.disabled = false;
         }
 
         function queuePush() {
