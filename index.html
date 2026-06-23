@@ -543,7 +543,7 @@
                     items.forEach(item => {
                         cell += `
                             <div class="mb-1 p-1.5 bg-zinc-800 rounded" style="${colorBorderStyle(item.color)}">
-                                <a href="#" class="ticket-link">${item.ticket}</a> 
+                                <a href="#" onclick="editItem(${item.id}); return false;" class="ticket-link" title="Klikni pre úpravu výjazdu">${item.ticket}</a> 
                                 <span class="time">(${item.time})</span><br>
                                 <span class="text-xs">${item.customer}</span>
                                 <div class="text-[10px] text-zinc-400">${item.note ? item.note.substring(0,45) + '...' : ''}</div>
@@ -621,7 +621,10 @@
                         ${getColorMeta(item.color).label}
                     </span></td>
                     <td class="text-xs">${item.note || ''}</td>
-                    <td><button onclick="deleteItem('${item.id}')" class="text-red-400 hover:text-red-500">×</button></td>
+                    <td class="whitespace-nowrap">
+                        <button onclick="editItem(${item.id})" class="text-blue-400 hover:text-blue-500 mr-2" title="Upraviť výjazd"><i class="fa-solid fa-pen"></i></button>
+                        <button onclick="deleteItem('${item.id}')" class="text-red-400 hover:text-red-500" title="Zmazať výjazd">×</button>
+                    </td>
                 `;
                 tbody.appendChild(tr);
             });
@@ -689,47 +692,66 @@
             setTimeout(() => w.print(), 400);
         }
 
-        function addNewPlanItem() {
+        // Nájde výjazd podľa ID a vráti aj kľúč slotu, v ktorom sa nachádza
+        // (potrebné pri editácii, keď sa zmenou dátumu/času musí výjazd presunúť
+        // do iného slotu v planData).
+        function findPlanItemById(id) {
+            for (const key of Object.keys(planData)) {
+                const idx = planData[key].findIndex(i => i.id == id);
+                if (idx !== -1) return { key, idx, item: planData[key][idx] };
+            }
+            return null;
+        }
+
+        function editItem(id) {
+            const found = findPlanItemById(id);
+            if (!found) { alert('Výjazd sa nenašiel.'); return; }
+            addNewPlanItem(found.item);
+        }
+
+        function addNewPlanItem(existingItem) {
+            const isEdit = !!existingItem;
+            const editDateValue = isEdit ? (findPlanItemById(existingItem.id)?.key.split('_')[0] || '2026-06-23') : '2026-06-23';
             const modal = document.createElement('div');
             modal.className = 'fixed inset-0 bg-black/70 flex items-center justify-center z-[200]';
             modal.innerHTML = `
                 <div class="bg-zinc-900 border border-zinc-700 rounded-2xl w-full max-w-lg p-6" onclick="event.stopImmediatePropagation()">
                     <div class="font-bold text-xl mb-5 flex items-center gap-x-3">
-                        <i class="fa-solid fa-plus text-orange-400"></i>
-                        <span>Pridať nový výjazd</span>
+                        <i class="fa-solid ${isEdit ? 'fa-pen' : 'fa-plus'} text-orange-400"></i>
+                        <span>${isEdit ? 'Upraviť výjazd' : 'Pridať nový výjazd'}</span>
                     </div>
                     
                     <div class="space-y-4">
                         <div class="grid grid-cols-2 gap-4">
                             <div>
                                 <label class="text-xs text-zinc-400 block mb-1">Dátum</label>
-                                <input type="date" id="new-date" value="2026-06-23" class="bg-zinc-950 border border-zinc-700 w-full p-2.5 rounded-xl">
+                                <input type="date" id="new-date" value="${editDateValue}" class="bg-zinc-950 border border-zinc-700 w-full p-2.5 rounded-xl">
                             </div>
                             <div>
                                 <label class="text-xs text-zinc-400 block mb-1">Čas</label>
-                                <input type="time" id="new-time" value="09:00" class="bg-zinc-950 border border-zinc-700 w-full p-2.5 rounded-xl">
+                                <input type="time" id="new-time" value="${isEdit ? existingItem.time : '09:00'}" class="bg-zinc-950 border border-zinc-700 w-full p-2.5 rounded-xl">
                             </div>
                         </div>
                         
                         <div>
                             <label class="text-xs text-zinc-400 block mb-1">Ticket číslo</label>
-                            <input type="text" id="new-ticket" placeholder="1423186" class="bg-zinc-950 border border-zinc-700 w-full p-2.5 rounded-xl">
+                            <input type="text" id="new-ticket" value="${isEdit ? (existingItem.ticket === '—' ? '' : existingItem.ticket) : ''}" placeholder="1423186" class="bg-zinc-950 border border-zinc-700 w-full p-2.5 rounded-xl">
                         </div>
                         
                         <div>
                             <label class="text-xs text-zinc-400 block mb-1">Zákazník</label>
-                            <input type="text" id="new-customer" placeholder="Šešera Michal" class="bg-zinc-950 border border-zinc-700 w-full p-2.5 rounded-xl">
+                            <input type="text" id="new-customer" value="${isEdit ? (existingItem.customer === 'Neznámy' ? '' : existingItem.customer) : ''}" placeholder="Šešera Michal" class="bg-zinc-950 border border-zinc-700 w-full p-2.5 rounded-xl">
                         </div>
                         
                         <div>
                             <label class="text-xs text-zinc-400 block mb-1">Adresa</label>
-                            <input type="text" id="new-address" placeholder="Krížna 4928/64, 821 08, Bratislava" class="bg-zinc-950 border border-zinc-700 w-full p-2.5 rounded-xl">
+                            <input type="text" id="new-address" value="${isEdit ? (existingItem.address || '') : ''}" placeholder="Krížna 4928/64, 821 08, Bratislava" class="bg-zinc-950 border border-zinc-700 w-full p-2.5 rounded-xl">
                         </div>
                         
                         <div>
                             <label class="text-xs text-zinc-400 block mb-1">Poznámka / Zadanie</label>
                             <textarea id="new-note" rows="3" placeholder="Migrácia z 3,7 na 5G + výmena antény" 
-                                class="bg-zinc-950 border border-zinc-700 w-full p-2.5 rounded-xl"></textarea>
+                                class="bg-zinc-950 border border-zinc-700 w-full p-2.5 rounded-xl">${isEdit ? (existingItem.note || '') : ''}</textarea>
                         </div>
 
                         <div>
@@ -748,15 +770,19 @@
                     <div class="flex gap-x-3 mt-6">
                         <button onclick="this.closest('.fixed').remove()" 
                             class="flex-1 py-2.5 border border-zinc-600 rounded-xl hover:bg-zinc-800">Zrušiť</button>
-                        <button onclick="saveNewPlanItemFromModal(this)" 
-                            class="flex-1 py-2.5 bg-orange-500 hover:bg-orange-400 text-black font-bold rounded-xl">Pridať výjazd</button>
+                        <button onclick="saveNewPlanItemFromModal(this, ${isEdit ? existingItem.id : 'null'})" 
+                            class="flex-1 py-2.5 bg-orange-500 hover:bg-orange-400 text-black font-bold rounded-xl">${isEdit ? 'Uložiť zmeny' : 'Pridať výjazd'}</button>
                     </div>
                 </div>
             `;
             document.body.appendChild(modal);
+            if (isEdit) {
+                // Predvyplň správnu farbu v selecte (atribút value v HTML stringe to nerieši pre <select>)
+                document.getElementById('new-color').value = existingItem.color || 'blue';
+            }
         }
 
-        function saveNewPlanItemFromModal(btn) {
+        function saveNewPlanItemFromModal(btn, editId) {
             const modal = btn.closest('.fixed');
             
             const date = document.getElementById('new-date').value;
@@ -765,6 +791,7 @@
             const customer = document.getElementById('new-customer').value || 'Neznámy';
             const address = document.getElementById('new-address').value;
             const note = document.getElementById('new-note').value;
+            const color = document.getElementById('new-color').value;
             
             if (!date || !time) {
                 alert("Dátum a čas sú povinné.");
@@ -781,20 +808,38 @@
             else if (hour < 18) slot = '16-18';
             
             const key = `${date}_${slot}`;
-            if (!planData[key]) planData[key] = [];
-            
-            const color = document.getElementById('new-color').value;
-            
-            planData[key].push({
-                id: Date.now(),
-                ticket,
-                customer,
-                address,
-                time,
-                team: "Katona",
-                color: color,
-                note
-            });
+
+            if (editId !== null && editId !== undefined) {
+                // EDITÁCIA existujúceho výjazdu: nájdi ho podľa ID, odstráň zo starého
+                // slotu (mohol sa zmenou dátumu/času zmeniť) a vlož aktualizovaný
+                // na nové miesto - zachová sa pôvodné ID a "team".
+                const found = findPlanItemById(editId);
+                if (found) {
+                    const updatedItem = {
+                        ...found.item,
+                        ticket, customer, address, time, color, note
+                    };
+                    // odstráň zo starého slotu
+                    planData[found.key].splice(found.idx, 1);
+                    if (planData[found.key].length === 0) delete planData[found.key];
+                    // vlož do (prípadne nového) slotu
+                    if (!planData[key]) planData[key] = [];
+                    planData[key].push(updatedItem);
+                }
+            } else {
+                // NOVÝ výjazd
+                if (!planData[key]) planData[key] = [];
+                planData[key].push({
+                    id: Date.now(),
+                    ticket,
+                    customer,
+                    address,
+                    time,
+                    team: currentTechnician === 'jakubik' ? 'Jakubík' : 'Katona',
+                    color: color,
+                    note
+                });
+            }
             
             modal.remove();
             renderPlan();
@@ -1106,6 +1151,19 @@
         let syncPushTimer = null;
         let lastSyncedHash = '';
         let suppressNextPush = false;
+        let cloudHasBeenSeenOnce = false; // true až po prvom úspešnom STIAHNUTÍ z cloudu v tejto relácii
+
+        // Spočíta celkový počet tiketov (cez oboch technikov) v danej dátovej štruktúre.
+        // Používa sa ako poistka: appka nikdy nepošle na cloud stav s podstatne
+        // menej tiketmi, než tam momentálne je, bez explicitného potvrdenia.
+        function countAllTickets(allTechData) {
+            let count = 0;
+            ['katona', 'jakubik'].forEach(tech => {
+                const pd = (allTechData[tech] && allTechData[tech].planData) || {};
+                Object.values(pd).forEach(items => { count += items.length; });
+            });
+            return count;
+        }
 
         function setSyncStatus(state, text) {
             const dot = document.querySelector('#sync-status-bar i');
@@ -1168,7 +1226,8 @@
                     headers: {
                         'Content-Type': 'application/json',
                         'X-Master-Key': apiKey,
-                        'X-Bin-Name': 'cumtomers-planner-data'
+                        'X-Bin-Name': 'cumtomers-planner-data',
+                        'X-Bin-Versioning': 'true'
                     },
                     body: JSON.stringify({ katona: ALL_TECH_DATA.katona, jakubik: ALL_TECH_DATA.jakubik, savedAt: new Date().toISOString() })
                 });
@@ -1222,12 +1281,42 @@
         async function pushToCloud() {
             if (!syncBinId || !syncApiKey) return;
             if (suppressNextPush) { suppressNextPush = false; return; }
+
+            // POISTKA: pred zápisom najprv over, koľko tiketov je momentálne v cloude.
+            // Ak by nový stav mal výrazne menej tiketov než cloud (napr. cloud má 12,
+            // nový stav má 0-2), niečo je podozrivé - appka sa pred prepísaním spýta.
+            try {
+                const checkRes = await fetch(`${SYNC_API_BASE}/${syncBinId}/latest`, { headers: { 'X-Master-Key': syncApiKey } });
+                if (checkRes.ok) {
+                    const checkData = await checkRes.json();
+                    const cloudCount = countAllTickets(checkData.record || {});
+                    const localCount = countAllTickets(ALL_TECH_DATA);
+                    // Spúšťa sa len ak cloud mal aspoň 3 tikety a nový stav by stratil aspoň polovicu z nich.
+                    if (cloudCount >= 3 && localCount < cloudCount / 2) {
+                        setSyncStatus('error', `Zastavené: cloud má ${cloudCount}, ukladal by sa pokles na ${localCount}`);
+                        const proceed = confirm(
+                            `POZOR: V cloude je momentálne ${cloudCount} tiketov, ale chystáš sa uložiť stav s len ${localCount}.\n\n` +
+                            `Toto vyzerá ako neúmyselná strata dát (napr. appka sa práve načítala bez lokálnej kópie).\n\n` +
+                            `Klikni OK len ak si si ISTÝ, že chceš tieto tikety naozaj zmazať z cloudu.\n` +
+                            `Klikni Zrušiť, ak si tu nechtiac a chceš dáta zachovať (odporúčané).`
+                        );
+                        if (!proceed) {
+                            setSyncStatus('error', 'Uloženie zrušené - dáta v cloude zachované');
+                            return;
+                        }
+                    }
+                }
+            } catch (e) {
+                // Ak sa nepodarí overiť stav cloudu, pokračuj opatrne ďalej (offline scenár) -
+                // nechceme appku úplne zablokovať pri výpadku siete.
+            }
+
             syncInProgress = true;
             setSyncStatus('loading', 'Ukladám...');
             try {
                 const res = await fetch(`${SYNC_API_BASE}/${syncBinId}`, {
                     method: 'PUT',
-                    headers: { 'Content-Type': 'application/json', 'X-Master-Key': syncApiKey },
+                    headers: { 'Content-Type': 'application/json', 'X-Master-Key': syncApiKey, 'X-Bin-Versioning': 'true' },
                     body: JSON.stringify({ katona: ALL_TECH_DATA.katona, jakubik: ALL_TECH_DATA.jakubik, savedAt: new Date().toISOString() })
                 });
                 if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -1241,7 +1330,7 @@
         }
 
         async function pullFromCloud(silent) {
-            if (!syncBinId || !syncApiKey) { setSyncStatus('offline', 'Nepripojené — klikni Sync'); return; }
+            if (!syncBinId || !syncApiKey) { setSyncStatus('offline', 'Nepripojené — klikni Sync'); return false; }
             if (!silent) setSyncStatus('loading', 'Sťahujem...');
             try {
                 const res = await fetch(`${SYNC_API_BASE}/${syncBinId}/latest`, { headers: { 'X-Master-Key': syncApiKey } });
@@ -1260,8 +1349,10 @@
                     renderPendingCalls();
                 }
                 setSyncStatus('ok', 'Synchronizované');
+                return true;
             } catch (e) {
                 setSyncStatus('error', 'Chyba pripojenia');
+                return false;
             }
         }
 
@@ -1353,11 +1444,26 @@
         }
 
         // Init
-        function init() {
+        // KĽÚČOVÁ OPRAVA: ak je sync nastavený, appka NAJPRV počká na stiahnutie
+        // dát z cloudu, a až POTOM urobí prvý render a aktivuje automatické
+        // ukladanie (save-on-render patch). Predtým sa stávalo, že sa stihol
+        // spustiť render s natvrdo zakódovanými/vzorovými dátami a následný
+        // automatický push prepísal cloud skôr, než sa stiahli reálne dáta.
+        async function init() {
             const savedTech = localStorage.getItem('cumtomers_active_tech');
             if (savedTech && ALL_TECH_DATA[savedTech]) currentTechnician = savedTech;
 
-            loadAllData();
+            loadAllData(); // lokálna kópia z localStorage (rýchly štart, offline fallback)
+
+            if (syncBinId && syncApiKey) {
+                setSyncStatus('loading', 'Sťahujem dáta z cloudu...');
+                const success = await pullFromCloud(true);
+                cloudHasBeenSeenOnce = success;
+                if (!success) {
+                    setSyncStatus('error', 'Cloud nedostupný - zobrazené lokálne dáta');
+                }
+            }
+
             updateTechSwitcherUI();
             renderPlan();
             renderPendingCalls();
@@ -1376,7 +1482,7 @@
             renderPendingCalls = function(){ origPend(); saveAllData(); };
 
             if (syncBinId && syncApiKey) {
-                startSyncPolling();
+                if (cloudHasBeenSeenOnce) setSyncStatus('ok', 'Synchronizované');
             } else {
                 setSyncStatus('offline', 'Nepripojené — klikni Sync');
             }
