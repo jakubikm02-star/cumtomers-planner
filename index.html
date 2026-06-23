@@ -38,6 +38,19 @@
             .pornhub-header .flex.items-center.gap-x-4 { gap: 0.75rem; }
             .pornhub-header span[style*="font-size: 42px"] { font-size: 28px !important; letter-spacing: -1px !important; }
 
+            #tech-switcher {
+                width: 100%;
+                gap: 0.5rem;
+            }
+            #tech-switcher .tech-tab {
+                flex: 1;
+                padding: 0.6rem 0.4rem;
+                font-size: 12px;
+                text-align: center;
+                justify-content: center;
+            }
+            #tech-switcher .tech-tab i { display: none; }
+
             .pornhub-header > .flex.items-center.gap-x-3 {
                 display: grid;
                 grid-template-columns: 1fr 1fr;
@@ -161,6 +174,18 @@
         }
         .gap-row:hover { background: transparent !important; }
         .gap-row td { padding-top: 2px !important; padding-bottom: 2px !important; }
+
+        .tech-tab {
+            background: #1a1a1a;
+            border-color: #333;
+            color: #888;
+        }
+        .tech-tab:hover { border-color: #555; color: #ccc; }
+        .tech-tab.active {
+            background: #ff9000;
+            border-color: #ff9000;
+            color: #000;
+        }
         .ticket-link { 
             color: #ff9000; 
             text-decoration: none; 
@@ -197,11 +222,20 @@
                 </div>
                 <div class="text-sm">
                     <div class="text-white font-bold">Týždenný plán výjazdov <span class="text-xs bg-zinc-800 px-1.5 py-0.5 rounded align-middle">v1.4</span></div>
-                    <div style="color: #ff9000; font-size: 13px;">Katona Tamás • SWAN Edition</div>
+                    <div style="color: #ff9000; font-size: 13px;" id="active-tech-label">Katona Tamás • SWAN Edition</div>
                     <div id="sync-status-bar" class="text-xs mt-0.5 flex items-center gap-x-1.5 text-zinc-500">
                         <i class="fa-solid fa-circle-notch fa-spin"></i> <span id="sync-status-text">Pripájam sa...</span>
                     </div>
                 </div>
+            </div>
+
+            <div class="flex items-center gap-x-2" id="tech-switcher">
+                <button onclick="switchTechnician('katona')" data-tech="katona" class="tech-tab px-4 py-2 rounded text-sm font-bold border-2">
+                    <i class="fa-solid fa-helmet-safety mr-1.5"></i>Katona Tamás
+                </button>
+                <button onclick="switchTechnician('jakubik')" data-tech="jakubik" class="tech-tab px-4 py-2 rounded text-sm font-bold border-2">
+                    <i class="fa-solid fa-helmet-safety mr-1.5"></i>Jakubík Martin
+                </button>
             </div>
             
             <div class="flex items-center gap-x-3">
@@ -314,33 +348,64 @@
     <script>
         let currentWeekStart = new Date('2026-06-22');
         
-        // Sample data from the dump you sent (Katona's week)
-        let planData = {
-            "2026-06-22_8-10": [
-                {id: 1, ticket: "1420921", customer: "Olekšák Lukáš", address: "Jégého 16999/12, 821 08, Bratislava", time: "08:00", team: "A", note: "migrácia z LTE na 5G, prosím o výmenu antény"},
-                {id: 2, ticket: "1422167", customer: "Szittya Tamas", address: "Pribinova 17130/26, 811 09, Bratislava", time: "09:30", team: "B", note: "zmena služby: DUO Internet L + TV L od 1.7.2026"}
-            ],
-            "2026-06-22_12-14": [
-                {id: 3, ticket: "1418872", customer: "Harvančík Andrej", address: "Bohrova 1204/5, 851 01, Bratislava", time: "13:00", team: "A", note: "zriadenie int. S s opt. prevod. s wifi + podpis EZZD, ODO, OP"}
-            ],
-            "2026-06-22_14-16": [
-                {id: 4, ticket: "1423086", customer: "Kuznecov Marek", address: "Vietnamská 18076/47, 821 04, Bratislava", time: "14:30", team: "A", note: "zriadenie Internet S 100/25 + WiFi router PRO + podpis"}
-            ],
-            "2026-06-23_8-10": [
-                {id: 5, ticket: "1422703", customer: "GULL s.r.o.", address: "Pribinova 17130/18, 811 09, Bratislava", time: "08:00", team: "B", note: "Zmena na FTTB+ Internet S 400/25 + inštalácia mikrotiku"}
-            ],
-            "2026-06-23_12-14": [
-                {id: 6, ticket: "1422647", customer: "Dlugoš Marián", address: "Černyševského 1281/37, 851 01, Bratislava", time: "12:30", team: "A", note: "Internet S 100/25 + wifi router PRO"},
-                {id: 7, ticket: "1422648", customer: "— (rovnaká adresa)", address: "Černyševského 1281/37, 851 01, Bratislava", time: "13:00", team: "B", note: "osadenie switcha kvôli službám FTTB+"}
-            ],
-            "2026-06-24_8-10": [
-                {id: 8, ticket: "1422509", customer: "Svoboda Vlastislav", address: "Vajnorská 1414/128, 831 04, Bratislava", time: "08:00", team: "A", note: "zriadenie Internet S 30/5 + WiFi router LTE/5G"},
-                {id: 9, ticket: "1422903", customer: "Ondirko Matlonová Lívia", address: "Silvánska 459/15, 841 04, Bratislava", time: "09:29", team: "B", note: "migrácia DUO - Internet M + TV M"}
-            ],
-            "2026-06-24_12-14": [
-                {id: 10, ticket: "1422590", customer: "Krchová Adriana", address: "Píniová 14357/14, 821 07, Bratislava", time: "12:30", team: "A", note: "Duo balík Internet S (100/25) + wifi + TV S + 1x STB"}
-            ]
+        // ==================== MULTI-TECHNIK ÚLOŽISKO ====================
+        // Dáta každého technika sú oddelené (vlastný planData + pendingCalls).
+        // currentTechnician určuje, ktoré dáta sú práve aktívne v premenných
+        // planData/pendingCalls nižšie - všetky render/save funkcie pracujú
+        // jednoducho s týmito dvomi premennými bez zmeny, len sa pri prepnutí
+        // technika obsah prehodí.
+        let currentTechnician = 'katona';
+
+        const ALL_TECH_DATA = {
+            katona: {
+                planData: {
+                    "2026-06-22_8-10": [
+                        {id: 1, ticket: "1420921", customer: "Olekšák Lukáš", address: "Jégého 16999/12, 821 08, Bratislava", time: "08:00", team: "A", note: "migrácia z LTE na 5G, prosím o výmenu antény"},
+                        {id: 2, ticket: "1422167", customer: "Szittya Tamas", address: "Pribinova 17130/26, 811 09, Bratislava", time: "09:30", team: "B", note: "zmena služby: DUO Internet L + TV L od 1.7.2026"}
+                    ],
+                    "2026-06-22_12-14": [
+                        {id: 3, ticket: "1418872", customer: "Harvančík Andrej", address: "Bohrova 1204/5, 851 01, Bratislava", time: "13:00", team: "A", note: "zriadenie int. S s opt. prevod. s wifi + podpis EZZD, ODO, OP"}
+                    ],
+                    "2026-06-22_14-16": [
+                        {id: 4, ticket: "1423086", customer: "Kuznecov Marek", address: "Vietnamská 18076/47, 821 04, Bratislava", time: "14:30", team: "A", note: "zriadenie Internet S 100/25 + WiFi router PRO + podpis"}
+                    ],
+                    "2026-06-23_8-10": [
+                        {id: 5, ticket: "1422703", customer: "GULL s.r.o.", address: "Pribinova 17130/18, 811 09, Bratislava", time: "08:00", team: "B", note: "Zmena na FTTB+ Internet S 400/25 + inštalácia mikrotiku"}
+                    ],
+                    "2026-06-23_12-14": [
+                        {id: 6, ticket: "1422647", customer: "Dlugoš Marián", address: "Černyševského 1281/37, 851 01, Bratislava", time: "12:30", team: "A", note: "Internet S 100/25 + wifi router PRO"},
+                        {id: 7, ticket: "1422648", customer: "— (rovnaká adresa)", address: "Černyševského 1281/37, 851 01, Bratislava", time: "13:00", team: "B", note: "osadenie switcha kvôli službám FTTB+"}
+                    ],
+                    "2026-06-24_8-10": [
+                        {id: 8, ticket: "1422509", customer: "Svoboda Vlastislav", address: "Vajnorská 1414/128, 831 04, Bratislava", time: "08:00", team: "A", note: "zriadenie Internet S 30/5 + WiFi router LTE/5G"},
+                        {id: 9, ticket: "1422903", customer: "Ondirko Matlonová Lívia", address: "Silvánska 459/15, 841 04, Bratislava", time: "09:29", team: "B", note: "migrácia DUO - Internet M + TV M"}
+                    ],
+                    "2026-06-24_12-14": [
+                        {id: 10, ticket: "1422590", customer: "Krchová Adriana", address: "Píniová 14357/14, 821 07, Bratislava", time: "12:30", team: "A", note: "Duo balík Internet S (100/25) + wifi + TV S + 1x STB"}
+                    ]
+                },
+                pendingCalls: [
+                    {
+                        id: 1,
+                        date: "2026-06-22",
+                        person: "Najomník (Krížna 4928)",
+                        phone: "— (zisťovať)",
+                        reason: "Dohodnúť termín výmeny antény + inštalácie",
+                        status: "Čaká",
+                        note: "V pondelok ze bude volat. Musi sa dohodnut s najomnikom"
+                    }
+                ]
+            },
+            jakubik: {
+                planData: {},
+                pendingCalls: []
+            }
         };
+
+        // Aktívne dáta - vždy odkazujú na dáta currentTechnician. Všetky render/save
+        // funkcie nižšie pracujú priamo s týmito dvomi premennými.
+        let planData = ALL_TECH_DATA[currentTechnician].planData;
+        let pendingCalls = ALL_TECH_DATA[currentTechnician].pendingCalls;
 
         const DAY_NAMES = ['Ne', 'Po', 'Ut', 'St', 'Št', 'Pi', 'So'];
 
@@ -758,22 +823,12 @@
             const blob = new Blob([csv], {type: 'text/csv'});
             const a = document.createElement('a');
             a.href = URL.createObjectURL(blob);
-            a.download = `katona_plan_${currentWeekStart.toISOString().slice(0,10)}.csv`;
+            a.download = `${currentTechnician}_plan_${currentWeekStart.toISOString().slice(0,10)}.csv`;
             a.click();
         }
 
         // ==================== DRUHÁ TABUĽKA: NA ZAVOLANIE ====================
-        let pendingCalls = [
-            {
-                id: 1,
-                date: "2026-06-22",
-                person: "Najomník (Krížna 4928)",
-                phone: "— (zisťovať)",
-                reason: "Dohodnúť termín výmeny antény + inštalácie",
-                status: "Čaká",
-                note: "V pondelok ze bude volat. Musi sa dohodnut s najomnikom"
-            }
-        ];
+        // (dáta pendingCalls sú definované vyššie v ALL_TECH_DATA podľa technika)
 
         function renderPendingCalls() {
             const tbody = document.getElementById('pending-calls-list');
@@ -921,7 +976,10 @@
 
         function deletePendingCall(id) {
             if (!confirm("Zmazať túto položku na zavolanie?")) return;
-            pendingCalls = pendingCalls.filter(i => i.id != id);
+            // Mutácia in-place (splice), aby premenná pendingCalls neprestala
+            // odkazovať na ALL_TECH_DATA[currentTechnician].pendingCalls.
+            const idx = pendingCalls.findIndex(i => i.id == id);
+            if (idx !== -1) pendingCalls.splice(idx, 1);
             renderPendingCalls();
         }
 
@@ -1061,7 +1119,8 @@
         }
 
         function hashState() {
-            return JSON.stringify({planData, pendingCalls}).length + ':' + JSON.stringify({planData, pendingCalls}).slice(0,40);
+            const s = JSON.stringify(ALL_TECH_DATA);
+            return s.length + ':' + s.slice(0,40);
         }
 
         function showSyncSetupModal() {
@@ -1111,7 +1170,7 @@
                         'X-Master-Key': apiKey,
                         'X-Bin-Name': 'cumtomers-planner-data'
                     },
-                    body: JSON.stringify({ planData, pendingCalls, savedAt: new Date().toISOString() })
+                    body: JSON.stringify({ katona: ALL_TECH_DATA.katona, jakubik: ALL_TECH_DATA.jakubik, savedAt: new Date().toISOString() })
                 });
                 const data = await res.json();
                 if (!res.ok) throw new Error(data.message || 'Chyba pri vytváraní');
@@ -1142,9 +1201,11 @@
                 syncApiKey = apiKey;
                 localStorage.setItem('cumtomers_bin_id', syncBinId);
                 localStorage.setItem('cumtomers_api_key', syncApiKey);
-                if (data.record && data.record.planData) {
-                    planData = data.record.planData;
-                    pendingCalls = data.record.pendingCalls || [];
+                if (data.record && (data.record.katona || data.record.jakubik)) {
+                    if (data.record.katona) ALL_TECH_DATA.katona = data.record.katona;
+                    if (data.record.jakubik) ALL_TECH_DATA.jakubik = data.record.jakubik;
+                    planData = ALL_TECH_DATA[currentTechnician].planData;
+                    pendingCalls = ALL_TECH_DATA[currentTechnician].pendingCalls;
                     suppressNextPush = true;
                     renderPlan();
                     renderPendingCalls();
@@ -1167,7 +1228,7 @@
                 const res = await fetch(`${SYNC_API_BASE}/${syncBinId}`, {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json', 'X-Master-Key': syncApiKey },
-                    body: JSON.stringify({ planData, pendingCalls, savedAt: new Date().toISOString() })
+                    body: JSON.stringify({ katona: ALL_TECH_DATA.katona, jakubik: ALL_TECH_DATA.jakubik, savedAt: new Date().toISOString() })
                 });
                 if (!res.ok) throw new Error('HTTP ' + res.status);
                 lastSyncedHash = hashState();
@@ -1186,11 +1247,13 @@
                 const res = await fetch(`${SYNC_API_BASE}/${syncBinId}/latest`, { headers: { 'X-Master-Key': syncApiKey } });
                 if (!res.ok) throw new Error('HTTP ' + res.status);
                 const data = await res.json();
-                const incomingHash = JSON.stringify({planData: data.record.planData, pendingCalls: data.record.pendingCalls}).length + ':' +
-                                      JSON.stringify({planData: data.record.planData, pendingCalls: data.record.pendingCalls}).slice(0,40);
+                const incomingHash = JSON.stringify({katona: data.record.katona, jakubik: data.record.jakubik}).length + ':' +
+                                      JSON.stringify({katona: data.record.katona, jakubik: data.record.jakubik}).slice(0,40);
                 if (data.record && incomingHash !== lastSyncedHash && incomingHash !== hashState()) {
-                    planData = data.record.planData || planData;
-                    pendingCalls = data.record.pendingCalls || pendingCalls;
+                    if (data.record.katona) ALL_TECH_DATA.katona = data.record.katona;
+                    if (data.record.jakubik) ALL_TECH_DATA.jakubik = data.record.jakubik;
+                    planData = ALL_TECH_DATA[currentTechnician].planData;
+                    pendingCalls = ALL_TECH_DATA[currentTechnician].pendingCalls;
                     lastSyncedHash = incomingHash;
                     suppressNextPush = true;
                     renderPlan();
@@ -1227,27 +1290,29 @@
         // Ukladanie dát — lokálne okamžite (rýchle UI) + cloud (zdieľané medzi zariadeniami)
         function saveAllData() {
             try {
-                localStorage.setItem('cumtomers_planData', JSON.stringify(planData));
-                localStorage.setItem('cumtomers_pendingCalls', JSON.stringify(pendingCalls));
+                localStorage.setItem('cumtomers_alldata', JSON.stringify(ALL_TECH_DATA));
             } catch(e){}
             queuePush();
         }
 
         function loadAllData() {
             try {
-                const p = localStorage.getItem('cumtomers_planData');
-                if (p) planData = JSON.parse(p);
-                const c = localStorage.getItem('cumtomers_pendingCalls');
-                if (c) pendingCalls = JSON.parse(c);
+                const raw = localStorage.getItem('cumtomers_alldata');
+                if (raw) {
+                    const parsed = JSON.parse(raw);
+                    if (parsed.katona) ALL_TECH_DATA.katona = parsed.katona;
+                    if (parsed.jakubik) ALL_TECH_DATA.jakubik = parsed.jakubik;
+                    planData = ALL_TECH_DATA[currentTechnician].planData;
+                    pendingCalls = ALL_TECH_DATA[currentTechnician].pendingCalls;
+                }
             } catch(e){}
         }
 
-        // Init
-        // Jednoduchý export aktuálneho stavu (pre manuálne nahratie na GitHub)
+        // Export aktuálneho stavu (oboch technikov) - pre manuálne nahratie na GitHub
         function exportCurrentState() {
             const data = {
-                planData: planData,
-                pendingCalls: pendingCalls,
+                katona: ALL_TECH_DATA.katona,
+                jakubik: ALL_TECH_DATA.jakubik,
                 exportedAt: new Date().toISOString()
             };
             
@@ -1262,9 +1327,38 @@
             alert("Stav exportovaný. Môžeš ho použiť na obnovenie alebo nahratie na GitHub.");
         }
 
+        const TECH_LABELS = {
+            katona: 'Katona Tamás • SWAN Edition',
+            jakubik: 'Jakubík Martin • SWAN Edition'
+        };
+
+        function updateTechSwitcherUI() {
+            document.querySelectorAll('.tech-tab').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.tech === currentTechnician);
+            });
+            const label = document.getElementById('active-tech-label');
+            if (label) label.textContent = TECH_LABELS[currentTechnician];
+        }
+
+        function switchTechnician(tech) {
+            if (tech === currentTechnician) return;
+            if (!ALL_TECH_DATA[tech]) return;
+            currentTechnician = tech;
+            planData = ALL_TECH_DATA[tech].planData;
+            pendingCalls = ALL_TECH_DATA[tech].pendingCalls;
+            localStorage.setItem('cumtomers_active_tech', tech);
+            updateTechSwitcherUI();
+            renderPlan();
+            renderPendingCalls();
+        }
+
         // Init
         function init() {
+            const savedTech = localStorage.getItem('cumtomers_active_tech');
+            if (savedTech && ALL_TECH_DATA[savedTech]) currentTechnician = savedTech;
+
             loadAllData();
+            updateTechSwitcherUI();
             renderPlan();
             renderPendingCalls();
 
