@@ -92,7 +92,7 @@
 
             /* Detailný zoznam a "na zavolanie": skry tabuľkový header, presuň na karty */
             #detail-list, #pending-calls-list { display: block; width: 100%; }
-            #detail-list tr:not(.bg-zinc-800), #pending-calls-list tr:not(.bg-zinc-800) {
+            #detail-list tr:not(.bg-zinc-800):not(.gap-row), #pending-calls-list tr:not(.bg-zinc-800) {
                 display: grid;
                 grid-template-columns: 1fr;
                 gap: 0.2rem;
@@ -103,6 +103,8 @@
                 margin-bottom: 0.5rem;
             }
             #detail-list tr.bg-zinc-800, #pending-calls-list tr.bg-zinc-800 { border-radius: 0.5rem; margin-top: 0.5rem; }
+            #detail-list tr.gap-row { display: block; margin: 0.3rem 0; }
+            #detail-list tr.gap-row td { display: block; padding: 0 !important; border: none; }
             #detail-list td, #pending-calls-list td { display: block; border: none; padding: 0.1rem 0 !important; }
             #detail-list td:empty, #pending-calls-list td:empty { display: none; }
             #detail-list table thead, #pending-calls-list table thead,
@@ -157,6 +159,8 @@
             padding: 4px;
             font-size: 12px;
         }
+        .gap-row:hover { background: transparent !important; }
+        .gap-row td { padding-top: 2px !important; padding-bottom: 2px !important; }
         .ticket-link { 
             color: #ff9000; 
             text-decoration: none; 
@@ -340,6 +344,82 @@
 
         const DAY_NAMES = ['Ne', 'Po', 'Ut', 'St', 'Št', 'Pi', 'So'];
 
+        // Centrálna mapa farieb/kategórií výjazdov.
+        // red/yellow/green/blue = pôvodné plné farby (bez zmeny významu).
+        // green-yellow / green-blue = nové kombinované (polovičaté) kategórie.
+        const COLOR_META = {
+            red:          { hex: '#ef4444', label: '5G',                         badgeClass: 'bg-red-500/20 text-red-400' },
+            yellow:       { hex: '#eab308', label: 'Optika (výstraha objektu)',   badgeClass: 'bg-yellow-500/20 text-yellow-400' },
+            green:        { hex: '#10b981', label: 'Jednoduchá',                  badgeClass: 'bg-emerald-500/20 text-emerald-400' },
+            blue:         { hex: '#3b82f6', label: 'FTTB (výstraha objektu)',     badgeClass: 'bg-blue-500/20 text-blue-400' },
+            'green-yellow': { hex: ['#10b981', '#eab308'], label: 'Jednoduchá optika',        badgeClass: 'bg-gradient-to-r from-emerald-500/20 to-yellow-500/20 text-emerald-300' },
+            'green-blue':   { hex: ['#10b981', '#3b82f6'], label: 'Jednoduchá nová inšt. FTTB+', badgeClass: 'bg-gradient-to-r from-emerald-500/20 to-blue-500/20 text-emerald-300' }
+        };
+
+        function getColorMeta(color) {
+            return COLOR_META[color] || COLOR_META.blue;
+        }
+
+        // Vráti inline style pre 4px farebný okraj vľavo. Pri kombinovaných
+        // farbách rozdelí okraj na hornú a dolnú polovicu (border-image gradient).
+        function colorBorderStyle(color) {
+            const meta = getColorMeta(color);
+            if (Array.isArray(meta.hex)) {
+                return `border-left: 4px solid; border-image: linear-gradient(to bottom, ${meta.hex[0]} 50%, ${meta.hex[1]} 50%) 1;`;
+            }
+            return `border-left: 4px solid ${meta.hex};`;
+        }
+
+        // ===== TIME GAP medzi po sebe idúcimi výjazdmi =====
+        // Gap = rozdiel medzi 'time' (HH:MM) dvoch po sebe idúcich výjazdov v rámci
+        // toho istého dňa. Žiadny odhad trvania výjazdu - len holý rozdiel časov.
+        function timeToMinutes(t) {
+            const [h, m] = t.split(':').map(Number);
+            return h * 60 + (m || 0);
+        }
+
+        function classifyGap(minutes) {
+            if (minutes < 30) return { level: 'critical', label: 'KRITICKÉ', color: '#ef4444', bg: 'bg-red-500/15', text: 'text-red-400', border: 'border-red-500/40' };
+            if (minutes < 60) return { level: 'tight',    label: 'NAPEVNO',  color: '#eab308', bg: 'bg-yellow-500/10', text: 'text-yellow-400', border: 'border-yellow-500/30' };
+            return                 { level: 'ok',         label: 'OK',        color: '#10b981', bg: 'bg-emerald-500/10', text: 'text-emerald-400', border: 'border-emerald-500/20' };
+        }
+
+        function formatGapMinutes(minutes) {
+            if (minutes < 60) return `${minutes} min`;
+            const h = Math.floor(minutes / 60);
+            const m = minutes % 60;
+            return m === 0 ? `${h} h` : `${h} h ${m} min`;
+        }
+
+        // Vráti malý HTML pruh reprezentujúci medzeru medzi dvoma výjazdmi (pre detailný zoznam)
+        function gapRowHtml(minutes) {
+            const g = classifyGap(minutes);
+            const icon = g.level === 'critical' ? 'fa-triangle-exclamation' : g.level === 'tight' ? 'fa-clock' : 'fa-arrow-down';
+            return `
+                <tr class="gap-row">
+                    <td colspan="7" class="py-1 px-3">
+                        <div class="flex items-center gap-x-2 ${g.bg} ${g.border} border rounded px-2 py-1 text-[11px] ${g.text}">
+                            <i class="fa-solid ${icon}"></i>
+                            <span class="font-mono font-bold">${formatGapMinutes(minutes)}</span>
+                            <span class="opacity-70">medzera na presun</span>
+                            ${g.level !== 'ok' ? `<span class="ml-auto font-bold tracking-wide">${g.label}</span>` : ''}
+                        </div>
+                    </td>
+                </tr>`;
+        }
+
+        // Kompaktná verzia gap pruhu pre malé bunky hlavnej týždennej tabuľky
+        function gapCardHtml(minutes) {
+            const g = classifyGap(minutes);
+            const icon = g.level === 'critical' ? 'fa-triangle-exclamation' : g.level === 'tight' ? 'fa-clock' : 'fa-arrow-down';
+            return `
+                <div class="flex items-center gap-x-1 ${g.bg} border ${g.border} rounded px-1 py-0.5 my-1 text-[9px] ${g.text} leading-none">
+                    <i class="fa-solid ${icon} text-[8px]"></i>
+                    <span class="font-mono font-bold">${formatGapMinutes(minutes)}</span>
+                    ${g.level !== 'ok' ? `<span class="ml-auto font-bold">${g.label}</span>` : ''}
+                </div>`;
+        }
+
         function formatDate(d) {
             const day = DAY_NAMES[d.getDay()];
             return day + ' ' + d.toLocaleDateString('sk-SK', {day: '2-digit', month: '2-digit'});
@@ -373,24 +453,39 @@
             weekDates.forEach(date => {
                 const dateStr = date.toISOString().split('T')[0];
                 let row = `<td class="font-mono font-semibold bg-zinc-800">${formatDate(date)}</td>`;
-                
+
+                // Zoraď VŠETKY výjazdy daného dňa chronologicky (cez všetky sloty),
+                // aby gap medzi posledným v jednom slote a prvým v ďalšom slote tiež vyšiel správne.
+                const dayItemsSorted = [];
+                slots.forEach(slot => {
+                    const key = `${dateStr}_${slot}`;
+                    (planData[key] || []).forEach(item => dayItemsSorted.push(item));
+                });
+                dayItemsSorted.sort((a, b) => timeToMinutes(a.time) - timeToMinutes(b.time));
+
+                // Pre každý výjazd si predpočítaj gap k nasledujúcemu (podľa id, nech je rýchle vyhľadanie)
+                const gapAfterId = {};
+                for (let i = 0; i < dayItemsSorted.length - 1; i++) {
+                    const gap = timeToMinutes(dayItemsSorted[i + 1].time) - timeToMinutes(dayItemsSorted[i].time);
+                    if (gap >= 0) gapAfterId[dayItemsSorted[i].id] = gap;
+                }
+
                 slots.forEach(slot => {
                     const key = `${dateStr}_${slot}`;
                     const items = planData[key] || [];
                     
                     let cell = `<td class="plan-slot" data-slot-label="${slotLabels[slot]}" ${items.length === 0 ? 'data-empty="1"' : ''}>`;
                     items.forEach(item => {
-                        const colorClass = item.color === 'red' ? 'border-red-500' : 
-                                          item.color === 'yellow' ? 'border-yellow-500' : 
-                                          item.color === 'green' ? 'border-emerald-500' : 'border-blue-500';
-                        
                         cell += `
-                            <div class="mb-1 p-1.5 bg-zinc-800 border-l-4 ${colorClass} rounded">
+                            <div class="mb-1 p-1.5 bg-zinc-800 rounded" style="${colorBorderStyle(item.color)}">
                                 <a href="#" class="ticket-link">${item.ticket}</a> 
                                 <span class="time">(${item.time})</span><br>
                                 <span class="text-xs">${item.customer}</span>
                                 <div class="text-[10px] text-zinc-400">${item.note ? item.note.substring(0,45) + '...' : ''}</div>
                             </div>`;
+                        if (gapAfterId.hasOwnProperty(item.id)) {
+                            cell += gapCardHtml(gapAfterId[item.id]);
+                        }
                     });
                     cell += `</td>`;
                     row += cell;
@@ -422,7 +517,7 @@
             // Group by date with print button
             let currentDate = null;
             
-            allItems.forEach(item => {
+            allItems.forEach((item, idx) => {
                 if (item.date !== currentDate) {
                     currentDate = item.date;
                     const formattedDate = formatDateStr(item.date);
@@ -438,6 +533,16 @@
                         </td>
                     `;
                     tbody.appendChild(dateHeader);
+                } else {
+                    // Rovnaký deň ako predošlý výjazd → vlož vizualizáciu medzery medzi nimi
+                    const prevItem = allItems[idx - 1];
+                    const gapMin = timeToMinutes(item.time) - timeToMinutes(prevItem.time);
+                    if (gapMin >= 0) {
+                        const gapTr = document.createElement('tr');
+                        gapTr.className = 'gap-row';
+                        gapTr.innerHTML = gapRowHtml(gapMin).match(/<td[\s\S]*<\/td>/)[0];
+                        tbody.appendChild(gapTr);
+                    }
                 }
                 
                 const tr = document.createElement('tr');
@@ -447,8 +552,8 @@
                     <td>${item.customer}</td>
                     <td class="text-xs text-zinc-400">${item.address || ''}</td>
                     <td class="font-mono">${item.time}</td>
-                    <td><span class="px-2 py-0.5 text-xs rounded ${item.color === 'red' ? 'bg-red-500/20 text-red-400' : item.color === 'yellow' ? 'bg-yellow-500/20 text-yellow-400' : item.color === 'green' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-blue-500/20 text-blue-400'}">
-                        ${item.color === 'red' ? '5G' : item.color === 'yellow' ? 'Optika' : item.color === 'green' ? 'Jednoduchá' : 'FTTB'}
+                    <td><span class="px-2 py-0.5 text-xs rounded ${getColorMeta(item.color).badgeClass}">
+                        ${getColorMeta(item.color).label}
                     </span></td>
                     <td class="text-xs">${item.note || ''}</td>
                     <td><button onclick="deleteItem('${item.id}')" class="text-red-400 hover:text-red-500">×</button></td>
@@ -503,7 +608,7 @@
                             <div style="color:#555; font-size:13px;">${item.address || ''}</div>
                             <div style="margin-top:4px; font-size:13px;">${item.note || ''}</div>
                             <div style="margin-top:4px; font-size:12px; color:#888;">
-                                Ticket: ${item.ticket} | ${item.color === 'red' ? '5G' : item.color === 'yellow' ? 'Optika' : item.color === 'green' ? 'Jednoduchá' : 'FTTB'}
+                                Ticket: ${item.ticket} | ${getColorMeta(item.color).label}
                             </div>
                         </div>
                     `;
@@ -566,9 +671,11 @@
                             <label class="text-xs text-zinc-400 block mb-1">Kategória / Farba</label>
                             <select id="new-color" class="bg-zinc-950 border border-zinc-700 w-full p-2.5 rounded-xl">
                                 <option value="red">🔴 Červená - 5G</option>
-                                <option value="yellow">🟡 Žltá - Optika</option>
+                                <option value="yellow">🟡 Žltá - Optika (výstraha objektu / ťahanie kábla)</option>
                                 <option value="green">🟢 Zelená - Jednoduchá</option>
-                                <option value="blue">🔵 Modrá - FTTB</option>
+                                <option value="blue">🔵 Modrá - FTTB (výstraha objektu / ťahanie kábla)</option>
+                                <option value="green-yellow">🟢🟡 Zeleno-žltá - Jednoduchá optika</option>
+                                <option value="green-blue">🟢🔵 Zeleno-modrá - Jednoduchá nová inštalácia FTTB+</option>
                             </select>
                         </div>
                     </div>
