@@ -1238,6 +1238,1511 @@
                     headers: {
                         'Content-Type': 'application/json',
                         'X-Master-Key': apiKey,
+                        'X-Bin-Name': 'cumtomers-planner-data'
+                    },
+                    body: JSON.stringify({ katona: ALL_TECH_DATA.katona, jakubik: ALL_TECH_DATA.jakubik, savedAt: new Date().toISOString() })
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.message || 'Chyba pri vytváraní');
+                syncBinId = data.metadata.id;
+                syncApiKey = apiKey;
+                localStorage.setItem('cumtomers_bin_id', syncBinId);
+                localStorage.setItem('cumtomers_api_key', syncApiKey);
+                document.getElementById('sync-bin-id').value = syncBinId;
+                msg.innerHTML = `<span class="text-emerald-400">Vytvorené! Bin ID: <b>${syncBinId}</b><br>Skopíruj API kľúč aj toto ID na druhé zariadenie (tlačidlo Sync → vlož → Pripojiť).</span>`;
+                setSyncStatus('ok', 'Pripojené (zdroj)');
+                startSyncPolling();
+            } catch (e) {
+                msg.innerHTML = `<span class="text-red-400">Zlyhalo: ${e.message}</span>`;
+            }
+        }
+
+        async function connectToBin(btn) {
+            const apiKey = document.getElementById('sync-api-key').value.trim();
+            const binId = document.getElementById('sync-bin-id').value.trim();
+            const msg = document.getElementById('sync-modal-msg');
+            if (!apiKey || !binId) { msg.innerHTML = '<span class="text-red-400">Vlož API kľúč aj Bin ID.</span>'; return; }
+            msg.innerHTML = '<span class="text-zinc-400">Pripájam...</span>';
+            try {
+                const res = await fetch(`${SYNC_API_BASE}/${binId}/latest`, { headers: { 'X-Master-Key': apiKey } });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.message || 'Bin sa nenašiel');
+                syncBinId = binId;
+                syncApiKey = apiKey;
+                localStorage.setItem('cumtomers_bin_id', syncBinId);
+                localStorage.setItem('cumtomers_api_key', syncApiKey);
+                if (data.record && (data.record.katona || data.record.jakubik)) {
+                    if (data.record.katona) ALL_TECH_DATA.katona = data.record.katona;
+                    if (data.record.jakubik) ALL_TECH_DATA.jakubik = data.record.jakubik;
+                    planData = ALL_TECH_DATA[currentTechnician].planData;
+                    pendingCalls = ALL_TECH_DATA[currentTechnician].pendingCalls;
+                    suppressNextPush = true;
+                    renderPlan();
+                    renderPendingCalls();
+                }
+                msg.innerHTML = '<span class="text-emerald-400">Pripojené! Dáta stiahnuté.</span>';
+                setSyncStatus('ok', 'Pripojené');
+                startSyncPolling();
+                setTimeout(() => document.querySelector('.fixed.inset-0')?.remove(), 1200);
+            } catch (e) {
+                msg.innerHTML = `<span class="text-red-400">Zlyhalo: ${e.message}</span>`;
+            }
+        }
+
+        async function pushToCloud() {
+            if (!syncBinId || !syncApiKey) return;
+            if (suppressNextPush) { suppressNextPush = false; return; }
+
+            // Jemná poistka: upozorni len v extrémnom prípade, keď sa appka chystá
+            // vynulovať VŠETKY tikety, kým cloud má ich dosť (typický príznak toho,
+            // že appka sa práve naštartovala skôr, než stihla stiahnuť reálne dáta).
+            // Bežné mazanie jednotlivých výjazdov touto kontrolou neprechádza.
+            const localCount = countAllTickets(ALL_TECH_DATA);
+            if (localCount === 0 && !suppressZeroCheck) {
+                try {
+                    const checkRes = await fetch(`${SYNC_API_BASE}/${syncBinId}/latest`, { headers: { 'X-Master-Key': syncApiKey } });
+                    if (checkRes.ok) {
+                        const checkData = await checkRes.json();
+                        const cloudCount = countAllTickets(checkData.record || {});
+                        if (cloudCount >= 3) {
+                            const proceed = confirm(
+                                `POZOR: Chystáš sa uložiť úplne PRÁZDNY plán (0 tiketov), kým v cloude je momentálne ${cloudCount}.\n\n` +
+                                `Klikni OK len ak si si ISTÝ, že chceš všetky tikety naozaj zmazať.\n` +
+                                `Klikni Zrušiť, ak si tu nechtiac (napr. appka sa práve načítala) - dáta v cloude ostanú zachované.`
+                            );
+                            if (!proceed) {
+                                setSyncStatus('error', 'Uloženie zrušené - dáta v cloude zachované');
+                                return;
+                            }
+                        }
+                    }
+                } catch (e) {
+                    // Pri výpadku siete pokračuj ďalej, appku tým nezablokujeme.
+                }
+            }
+
+            syncInProgress = true;
+            setSyncStatus('loading', 'Ukladám...');
+            try {
+                const res = await fetch(`${SYNC_API_BASE}/${syncBinId}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json', 'X-Master-Key': syncApiKey },
+                    body: JSON.stringify({ katona: ALL_TECH_DATA.katona, jakubik: ALL_TECH_DATA.jakubik, savedAt: new Date().toISOString() }),
+                    keepalive: true // request prežije aj okamžitý F5/zatvorenie stránky tesne po odoslaní
+                });
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                lastSyncedHash = hashState();
+                setSyncStatus('ok', 'Synchronizované');
+            } catch (e) {
+                setSyncStatus('error', 'Chyba ukladania (offline?)');
+            } finally {
+                syncInProgress = false;
+            }
+        }
+
+        async function pullFromCloud(silent) {
+            if (!syncBinId || !syncApiKey) { setSyncStatus('offline', 'Nepripojené — klikni Sync'); return false; }
+            // Najprv zaruč, že žiadna lokálna zmena nečaká na odoslanie - inak by
+            // sme ňou prepísali to, čo si práve urobil(a) zmazaním/úpravou.
+            await flushPendingPush();
+            if (!silent) setSyncStatus('loading', 'Sťahujem...');
+            try {
+                const res = await fetch(`${SYNC_API_BASE}/${syncBinId}/latest`, { headers: { 'X-Master-Key': syncApiKey } });
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                const data = await res.json();
+                const incomingHash = simpleHash(JSON.stringify({katona: data.record.katona, jakubik: data.record.jakubik}));
+                if (data.record && incomingHash !== lastSyncedHash && incomingHash !== hashState()) {
+                    if (data.record.katona) ALL_TECH_DATA.katona = data.record.katona;
+                    if (data.record.jakubik) ALL_TECH_DATA.jakubik = data.record.jakubik;
+                    planData = ALL_TECH_DATA[currentTechnician].planData;
+                    pendingCalls = ALL_TECH_DATA[currentTechnician].pendingCalls;
+                    lastSyncedHash = incomingHash;
+                    suppressNextPush = true;
+                    renderPlan();
+                    renderPendingCalls();
+                }
+                setSyncStatus('ok', 'Synchronizované');
+                return true;
+            } catch (e) {
+                setSyncStatus('error', 'Chyba pripojenia');
+                return false;
+            }
+        }
+
+        function startSyncPolling() {
+            pullFromCloud(true); // jedno stiahnutie pri pripojení/načítaní stránky, ďalej len manuálne tlačidlom "Obnoviť"
+        }
+
+        async function manualRefresh(btn) {
+            if (!syncBinId || !syncApiKey) {
+                setSyncStatus('offline', 'Nepripojené — klikni Sync');
+                return;
+            }
+            const icon = btn.querySelector('i');
+            icon.classList.add('fa-spin');
+            btn.disabled = true;
+            await pullFromCloud(false);
+            icon.classList.remove('fa-spin');
+            btn.disabled = false;
+        }
+
+        function queuePush() {
+            clearTimeout(syncPushTimer);
+            // Bez debounce zdržania: saveAllData() sa volá len po explicitnej
+            // akcii (klik na Pridať/Uložiť/Zmazať), nie pri každom stlačení
+            // klávesy, takže oneskorenie tu len zvyšuje riziko, že F5/zatvorenie
+            // okna prebehne skôr, než sa zmena odošle na server.
+            pendingPushScheduled = true;
+            syncPushTimer = setTimeout(() => { pendingPushScheduled = false; pushToCloud(); }, 0);
+        }
+
+        // Ak je naplánovaný push, ktorý ešte neodišiel, vynúti jeho OKAMŽITÉ
+        // odoslanie a počká na jeho dokončenie. Volá sa pred akýmkoľvek pullom
+        // (manuálny refresh aj pri štarte appky), aby sa nestalo, že pull
+        // stiahne starší stav z cloudu a prepíše ním čerstvo urobenú lokálnu zmenu,
+        // ktorá ešte len čakala na odoslanie.
+        async function flushPendingPush() {
+            if (pendingPushScheduled) {
+                clearTimeout(syncPushTimer);
+                pendingPushScheduled = false;
+                await pushToCloud();
+            }
+        }
+
+        // Ukladanie dát — lokálne okamžite (rýchle UI) + cloud (zdieľané medzi zariadeniami)
+        function saveAllData() {
+            try {
+                localStorage.setItem('cumtomers_alldata', JSON.stringify(ALL_TECH_DATA));
+            } catch(e){}
+            queuePush();
+        }
+
+        function loadAllData() {
+            try {
+                const raw = localStorage.getItem('cumtomers_alldata');
+                if (raw) {
+                    const parsed = JSON.parse(raw);
+                    if (parsed.katona) ALL_TECH_DATA.katona = parsed.katona;
+                    if (parsed.jakubik) ALL_TECH_DATA.jakubik = parsed.jakubik;
+                    planData = ALL_TECH_DATA[currentTechnician].planData;
+                    pendingCalls = ALL_TECH_DATA[currentTechnician].pendingCalls;
+                }
+            } catch(e){}
+        }
+
+        // Export aktuálneho stavu (oboch technikov) - pre manuálne nahratie na GitHub
+        function exportCurrentState() {
+            const data = {
+                katona: ALL_TECH_DATA.katona,
+                jakubik: ALL_TECH_DATA.jakubik,
+                exportedAt: new Date().toISOString()
+            };
+            
+            const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `cumtomers-backup-${new Date().toISOString().slice(0,10)}.json`;
+            a.click();
+            URL.revokeObjectURL(url);
+            
+            alert("Stav exportovaný. Môžeš ho použiť na obnovenie alebo nahratie na GitHub.");
+        }
+
+        const TECH_LABELS = {
+            katona: 'Katona Tamás • SWAN Edition',
+            jakubik: 'Jakubík Martin • SWAN Edition'
+        };
+
+        function updateTechSwitcherUI() {
+            document.querySelectorAll('.tech-tab').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.tech === currentTechnician);
+            });
+            const label = document.getElementById('active-tech-label');
+            if (label) label.textContent = TECH_LABELS[currentTechnician];
+        }
+
+        function switchTechnician(tech) {
+            if (tech === currentTechnician) return;
+            if (!ALL_TECH_DATA[tech]) return;
+            currentTechnician = tech;
+            planData = ALL_TECH_DATA[tech].planData;
+            pendingCalls = ALL_TECH_DATA[tech].pendingCalls;
+            localStorage.setItem('cumtomers_active_tech', tech);
+            updateTechSwitcherUI();
+            renderPlan();
+            renderPendingCalls();
+        }
+
+        // Init
+        // KĽÚČOVÁ OPRAVA: ak je sync nastavený, appka NAJPRV počká na stiahnutie
+        // dát z cloudu, a až POTOM urobí prvý render a aktivuje automatické
+        // ukladanie (save-on-render patch). Predtým sa stávalo, že sa stihol
+        // spustiť render s natvrdo zakódovanými/vzorovými dátami a následný
+        // automatický push prepísal cloud skôr, než sa stiahli reálne dáta.
+        async function init() {
+            const savedTech = localStorage.getItem('cumtomers_active_tech');
+            if (savedTech && ALL_TECH_DATA[savedTech]) currentTechnician = savedTech;
+
+            loadAllData(); // lokálna kópia z localStorage (rýchly štart, offline fallback)
+
+            if (syncBinId && syncApiKey) {
+                setSyncStatus('loading', 'Sťahujem dáta z cloudu...');
+                const success = await pullFromCloud(true);
+                cloudHasBeenSeenOnce = success;
+                if (!success) {
+                    setSyncStatus('error', 'Cloud nedostupný - zobrazené lokálne dáta');
+                }
+            }
+
+            updateTechSwitcherUI();
+            renderPlan();
+            renderPendingCalls();
+
+            document.addEventListener('keydown', function(e) {
+                if (e.key === "?") {
+                    addNewPlanItem();
+                    e.preventDefault();
+                }
+            });
+
+            const origPlan = renderPlan;
+            renderPlan = function(){ origPlan(); saveAllData(); };
+
+            const origPend = renderPendingCalls;
+            renderPendingCalls = function(){ origPend(); saveAllData(); };
+
+            if (syncBinId && syncApiKey) {
+                if (cloudHasBeenSeenOnce) setSyncStatus('ok', 'Synchronizované');
+            } else {
+                setSyncStatus('offline', 'Nepripojené — klikni Sync');
+            }
+
+            console.log('%c[CUMTOMERS] Ready. Sync: ' + (syncBinId ? 'pripojené' : 'lokálne len'), 'color:#ff9000');
+        }
+
+        // Posledná poistná vrstva: ak appka zaznamená, že stránka sa zatvára
+        // (F5, zatvorenie tabu, navigácia preč) a ešte je naplánovaný push,
+        // ktorý nestihol odísť, skús ho vystreliť synchrónne ešte raz.
+        // (Hlavné krytie zabezpečuje keepalive:true priamo vo fetch v pushToCloud,
+        // toto je len doplnková záloha pre prípad, že by sa ten request ešte
+        // nestihol ani spustiť.)
+        window.addEventListener('pagehide', function() {
+            if (pendingPushScheduled && syncBinId && syncApiKey) {
+                clearTimeout(syncPushTimer);
+                pendingPushScheduled = false;
+                pushToCloud(); // fire-and-forget s keepalive, nemôžeme tu čakať na await
+            }
+        });
+
+        window.onload = init;
+    </script>
+</body>
+</html>
+            }
+            .pornhub-header .flex.items-center.gap-x-4 { gap: 0.75rem; }
+            .pornhub-header span[style*="font-size: 42px"] { font-size: 28px !important; letter-spacing: -1px !important; }
+
+            #tech-switcher {
+                width: 100%;
+                gap: 0.5rem;
+            }
+            #tech-switcher .tech-tab {
+                flex: 1;
+                padding: 0.6rem 0.4rem;
+                font-size: 12px;
+                text-align: center;
+                justify-content: center;
+            }
+            #tech-switcher .tech-tab i { display: none; }
+
+            .pornhub-header > .flex.items-center.gap-x-3 {
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 0.5rem;
+                width: 100%;
+            }
+            .pornhub-header > .flex.items-center.gap-x-3 > #week-label {
+                grid-column: 1 / -1;
+                text-align: center;
+            }
+            .pornhub-header button, .pornhub-header #week-label {
+                width: 100%;
+                justify-content: center;
+                padding: 0.6rem 0.5rem;
+                font-size: 12.5px;
+                white-space: nowrap;
+            }
+
+            /* Týždenná tabuľka: na mobile sa horizontálne tabuľky s 8 kolónkami
+               nedajú použiť - prepneme na vertikálny zoznam dní s kartami */
+            #plan-table thead { display: none; }
+            #plan-table, #plan-table tbody, #plan-table tr, #plan-table td {
+                display: block;
+                width: 100% !important;
+                border: none;
+            }
+            #plan-table tr {
+                margin-bottom: 0.75rem;
+                background: #141414;
+                border: 1px solid #333;
+                border-radius: 0.75rem;
+                overflow: hidden;
+            }
+            #plan-table td:first-child {
+                font-size: 14px;
+                padding: 0.6rem 0.8rem;
+                background: #1f1f1f;
+            }
+            #plan-table td.plan-slot { min-height: unset; border: none; border-top: 1px solid #262626; }
+            #plan-table td.plan-slot:empty { display: none; }
+            /* Skry prázdne sloty na mobile, aby karta nebola plná prázdneho miesta */
+            #plan-table td.plan-slot[data-empty="1"] { display: none; }
+            #plan-table td.plan-slot::before {
+                content: attr(data-slot-label);
+                display: block;
+                font-size: 10px;
+                color: #ff9000;
+                font-weight: 700;
+                letter-spacing: 0.5px;
+                margin-bottom: 4px;
+            }
+
+            /* Detailný zoznam a "na zavolanie": skry tabuľkový header, presuň na karty */
+            #detail-list, #pending-calls-list { display: block; width: 100%; }
+            #detail-list tr:not(.bg-zinc-800):not(.gap-row), #pending-calls-list tr:not(.bg-zinc-800) {
+                display: grid;
+                grid-template-columns: 1fr;
+                gap: 0.2rem;
+                padding: 0.75rem 0.5rem;
+                background: #141414;
+                border: 1px solid #2a2a2a;
+                border-radius: 0.6rem;
+                margin-bottom: 0.5rem;
+            }
+            #detail-list tr.bg-zinc-800, #pending-calls-list tr.bg-zinc-800 { border-radius: 0.5rem; margin-top: 0.5rem; }
+            #detail-list tr.gap-row { display: block; margin: 0.3rem 0; }
+            #detail-list tr.gap-row td { display: block; padding: 0 !important; border: none; }
+            #detail-list td, #pending-calls-list td { display: block; border: none; padding: 0.1rem 0 !important; }
+            #detail-list td:empty, #pending-calls-list td:empty { display: none; }
+            #detail-list table thead, #pending-calls-list table thead,
+            .bg-zinc-900.border.border-zinc-700.rounded-xl.p-5 > table > thead { display: none; }
+
+            #detail-list td.font-mono.text-blue-400::before { content: "🎫 "; }
+            #detail-list td.text-xs.text-zinc-400::before { content: "📍 "; }
+            #detail-list td.font-mono:not(.text-blue-400)::before { content: "🕐 "; }
+
+            /* Modálne okná: celá výška, scroll, väčšie dotykové ciele (Samsung Internet) */
+            .fixed.inset-0 { padding: 0.75rem; }
+            .fixed.inset-0 > div {
+                max-height: min(90vh, 90dvh);
+                overflow-y: auto;
+                width: 100%;
+                max-width: 100%;
+            }
+            .fixed.inset-0 input, .fixed.inset-0 select, .fixed.inset-0 textarea, .fixed.inset-0 button {
+                font-size: 16px; /* zabráni auto-zoomu pri focuse na iOS/Android */
+            }
+            .grid.grid-cols-2.gap-4 { grid-template-columns: 1fr 1fr; gap: 0.6rem; }
+
+            /* Sync status pill v hlavičke */
+            #sync-status-bar { font-size: 11px; }
+        }
+
+        .pornhub-header {
+            background: #000000;
+            border-bottom: 4px solid #ff9000;
+        }
+        
+        .pornhub-orange {
+            color: #ff9000;
+        }
+        
+        .swan-table { border-collapse: collapse; width: 100%; }
+        .swan-table td, .swan-table th { 
+            border: 1px solid #333;
+            padding: 8px 10px; 
+            font-size: 13px;
+            vertical-align: top;
+        }
+        .swan-table th { 
+            background: #1a1a1a; 
+            font-weight: 700;
+            color: #ff9000;
+        }
+        .plan-slot { 
+            min-height: 52px; 
+            background: #111;
+            border: 1px solid #333; 
+            padding: 4px;
+            font-size: 12px;
+        }
+        .gap-row:hover { background: transparent !important; }
+        .gap-row td { padding-top: 2px !important; padding-bottom: 2px !important; }
+
+        .tech-tab {
+            background: #1a1a1a;
+            border-color: #333;
+            color: #888;
+        }
+        .tech-tab:hover { border-color: #555; color: #ccc; }
+        .tech-tab.active {
+            background: #ff9000;
+            border-color: #ff9000;
+            color: #000;
+        }
+        .ticket-link { 
+            color: #ff9000; 
+            text-decoration: none; 
+            font-weight: 700; 
+        }
+        .ticket-link:hover { text-decoration: underline; }
+        .time { color: #888; font-size: 11px; }
+        
+        .section-title {
+            font-family: 'Roboto', sans-serif;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+        }
+        
+        .ph-button {
+            background: #ff9000;
+            color: black;
+            font-weight: 700;
+        }
+        .ph-button:hover {
+            background: #ffaa33;
+        }
+    </style>
+</head>
+<body class="p-6" style="background: #0a0a0a; color: #f1f1f1;">
+
+    <!-- Header like SWAN -->
+    <div class="max-w-[1400px] mx-auto">
+        <div class="pornhub-header px-6 py-4 mb-6 -mx-6 -mt-6 flex items-center justify-between">
+            <div class="flex items-center gap-x-4">
+                <div>
+                    <span style="font-family: 'Roboto', sans-serif; font-size: 42px; font-weight: 900; color: #ff9000; letter-spacing: -2px;">CUM</span>
+                    <span style="font-family: 'Roboto', sans-serif; font-size: 42px; font-weight: 900; color: white; letter-spacing: -2px;">TOMERS</span>
+                </div>
+                <div class="text-sm">
+                    <div class="text-white font-bold">Týždenný plán výjazdov <span class="text-xs bg-zinc-800 px-1.5 py-0.5 rounded align-middle">v1.4</span></div>
+                    <div style="color: #ff9000; font-size: 13px;" id="active-tech-label">Katona Tamás • SWAN Edition</div>
+                    <div id="sync-status-bar" class="text-xs mt-0.5 flex items-center gap-x-1.5 text-zinc-500">
+                        <i class="fa-solid fa-circle-notch fa-spin"></i> <span id="sync-status-text">Pripájam sa...</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="flex items-center gap-x-2" id="tech-switcher">
+                <button onclick="switchTechnician('katona')" data-tech="katona" class="tech-tab px-4 py-2 rounded text-sm font-bold border-2">
+                    <i class="fa-solid fa-helmet-safety mr-1.5"></i>Katona Tamás
+                </button>
+                <button onclick="switchTechnician('jakubik')" data-tech="jakubik" class="tech-tab px-4 py-2 rounded text-sm font-bold border-2">
+                    <i class="fa-solid fa-helmet-safety mr-1.5"></i>Jakubík Martin
+                </button>
+            </div>
+            
+            <div class="flex items-center gap-x-3">
+                <button onclick="prevWeek()" class="px-4 py-2 bg-zinc-800 border border-zinc-600 rounded text-sm">← Predchádzajúci týždeň</button>
+                <div class="px-5 py-2 bg-zinc-900 border border-zinc-600 rounded font-mono text-sm" id="week-label">22.06.2026 - 28.06.2026</div>
+                <button onclick="nextWeek()" class="px-4 py-2 bg-zinc-800 border border-zinc-600 rounded text-sm">Nasledujúci týždeň →</button>
+                
+                <button onclick="exportCSV()" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded text-sm font-semibold flex items-center gap-x-2">
+                    <i class="fa-solid fa-file-csv"></i> <span>CSV</span>
+                </button>
+                <button onclick="window.print()" class="px-4 py-2 bg-zinc-700 hover:bg-zinc-600 rounded text-sm font-semibold flex items-center gap-x-2">
+                    <i class="fa-solid fa-print"></i> <span>Vytlačiť</span>
+                </button>
+                <button onclick="manualRefresh(this)" class="px-4 py-2 bg-zinc-800 border border-zinc-600 rounded text-sm flex items-center gap-x-2" title="Stiahnuť najnovšie dáta z druhého zariadenia">
+                    <i class="fa-solid fa-arrows-rotate"></i> <span>Obnoviť</span>
+                </button>
+                <button onclick="showSyncSetupModal()" class="px-4 py-2 bg-zinc-800 border border-zinc-600 rounded text-sm flex items-center gap-x-2" title="Nastavenie zdieľaného úložiska">
+                    <i class="fa-solid fa-cloud"></i> <span>Sync</span>
+                </button>
+                <button onclick="showImportModal()" class="ph-button px-4 py-2 rounded text-sm font-bold flex items-center gap-x-2">
+                    <i class="fa-solid fa-paste"></i> <span>Prilepiť dump z Customers</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- Weekly Plan Table -->
+        <div class="bg-zinc-900 border border-zinc-700 rounded-xl overflow-hidden mb-8">
+            <table class="swan-table" id="plan-table">
+                <thead>
+                    <tr>
+                        <th class="w-28">Dátum</th>
+                        <th>6:00 - 8:00</th>
+                        <th>8:00 - 10:00</th>
+                        <th>10:00 - 12:00</th>
+                        <th>12:00 - 14:00</th>
+                        <th>14:00 - 16:00</th>
+                        <th>16:00 - 18:00</th>
+                        <th>Po 18:00</th>
+                    </tr>
+                </thead>
+                <tbody id="plan-body">
+                    <!-- JS generated -->
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Detailný zoznam (ako v SWANe dole) -->
+        <div class="bg-zinc-900 border border-zinc-700 rounded-xl p-5">
+            <div class="flex items-center justify-between mb-4">
+                <div class="font-bold text-lg">Detailný zoznam plánovaných výjazdov</div>
+                <button onclick="addNewPlanItem()" class="px-4 py-2 bg-red-600 hover:bg-red-500 text-sm font-bold rounded-lg flex items-center gap-x-2">
+                    <i class="fa-solid fa-plus"></i> <span>Pridať výjazd</span>
+                </button>
+            </div>
+
+            <table class="w-full text-sm">
+                <thead>
+                    <tr class="border-b border-zinc-600 text-left text-xs text-zinc-400">
+                        <th class="py-2 w-20">Ticket</th>
+                        <th>Zákazník</th>
+                        <th>Adresa</th>
+                        <th>Plánovaný čas</th>
+                        <th>Tím</th>
+                        <th>Zadanie / Poznámka</th>
+                        <th class="w-10"></th>
+                    </tr>
+                </thead>
+                <tbody id="detail-list">
+                    <!-- JS populated -->
+                </tbody>
+            </table>
+        </div>
+
+        <!-- DRUHÁ SAMOSTATNÁ TABUĽKA: PLÁNOVANIE / NA ZAVOLANIE -->
+        <div class="max-w-[1400px] mx-auto mt-10">
+            <div class="bg-zinc-900 border border-zinc-700 rounded-xl p-5">
+                <div class="flex items-center justify-between mb-4">
+                    <div>
+                        <div class="font-bold text-xl flex items-center gap-x-3">
+                            <i class="fa-solid fa-phone text-yellow-400"></i>
+                            <span>PLÁNOVANIE / NA ZAVOLANIE</span>
+                        </div>
+                        <div class="text-xs text-zinc-400">Veci, ktoré ešte nie sú na výjazd – len sa majú zavolať / dohodnúť termín</div>
+                    </div>
+                    <button onclick="addPendingCall()" class="px-4 py-2 bg-yellow-600 hover:bg-yellow-500 text-sm font-bold rounded-lg flex items-center gap-x-2">
+                        <i class="fa-solid fa-plus"></i> <span>+ Pridať na zavolanie</span>
+                    </button>
+                </div>
+
+                <table class="w-full text-sm">
+                    <thead>
+                        <tr class="border-b border-zinc-600 text-left text-xs text-zinc-400">
+                            <th class="py-2 w-28">Kedy volať</th>
+                            <th>Komu</th>
+                            <th>Telefón</th>
+                            <th>Dôvod / Čo riešiť</th>
+                            <th class="w-24">Stav</th>
+                            <th>Poznámka</th>
+                            <th class="w-10"></th>
+                        </tr>
+                    </thead>
+                    <tbody id="pending-calls-list">
+                        <!-- JS populated -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentWeekStart = new Date('2026-06-22');
+        
+        // ==================== MULTI-TECHNIK ÚLOŽISKO ====================
+        // Dáta každého technika sú oddelené (vlastný planData + pendingCalls).
+        // currentTechnician určuje, ktoré dáta sú práve aktívne v premenných
+        // planData/pendingCalls nižšie - všetky render/save funkcie pracujú
+        // jednoducho s týmito dvomi premennými bez zmeny, len sa pri prepnutí
+        // technika obsah prehodí.
+        let currentTechnician = 'katona';
+
+        const ALL_TECH_DATA = {
+            katona: {
+                planData: {
+                    "2026-06-22_8-10": [
+                        {id: 1, ticket: "1420921", customer: "Olekšák Lukáš", address: "Jégého 16999/12, 821 08, Bratislava", time: "08:00", team: "A", note: "migrácia z LTE na 5G, prosím o výmenu antény"},
+                        {id: 2, ticket: "1422167", customer: "Szittya Tamas", address: "Pribinova 17130/26, 811 09, Bratislava", time: "09:30", team: "B", note: "zmena služby: DUO Internet L + TV L od 1.7.2026"}
+                    ],
+                    "2026-06-22_12-14": [
+                        {id: 3, ticket: "1418872", customer: "Harvančík Andrej", address: "Bohrova 1204/5, 851 01, Bratislava", time: "13:00", team: "A", note: "zriadenie int. S s opt. prevod. s wifi + podpis EZZD, ODO, OP"}
+                    ],
+                    "2026-06-22_14-16": [
+                        {id: 4, ticket: "1423086", customer: "Kuznecov Marek", address: "Vietnamská 18076/47, 821 04, Bratislava", time: "14:30", team: "A", note: "zriadenie Internet S 100/25 + WiFi router PRO + podpis"}
+                    ],
+                    "2026-06-23_8-10": [
+                        {id: 5, ticket: "1422703", customer: "GULL s.r.o.", address: "Pribinova 17130/18, 811 09, Bratislava", time: "08:00", team: "B", note: "Zmena na FTTB+ Internet S 400/25 + inštalácia mikrotiku"}
+                    ],
+                    "2026-06-23_12-14": [
+                        {id: 6, ticket: "1422647", customer: "Dlugoš Marián", address: "Černyševského 1281/37, 851 01, Bratislava", time: "12:30", team: "A", note: "Internet S 100/25 + wifi router PRO"},
+                        {id: 7, ticket: "1422648", customer: "— (rovnaká adresa)", address: "Černyševského 1281/37, 851 01, Bratislava", time: "13:00", team: "B", note: "osadenie switcha kvôli službám FTTB+"}
+                    ],
+                    "2026-06-24_8-10": [
+                        {id: 8, ticket: "1422509", customer: "Svoboda Vlastislav", address: "Vajnorská 1414/128, 831 04, Bratislava", time: "08:00", team: "A", note: "zriadenie Internet S 30/5 + WiFi router LTE/5G"},
+                        {id: 9, ticket: "1422903", customer: "Ondirko Matlonová Lívia", address: "Silvánska 459/15, 841 04, Bratislava", time: "09:29", team: "B", note: "migrácia DUO - Internet M + TV M"}
+                    ],
+                    "2026-06-24_12-14": [
+                        {id: 10, ticket: "1422590", customer: "Krchová Adriana", address: "Píniová 14357/14, 821 07, Bratislava", time: "12:30", team: "A", note: "Duo balík Internet S (100/25) + wifi + TV S + 1x STB"}
+                    ]
+                },
+                pendingCalls: [
+                    {
+                        id: 1,
+                        date: "2026-06-22",
+                        person: "Najomník (Krížna 4928)",
+                        phone: "— (zisťovať)",
+                        reason: "Dohodnúť termín výmeny antény + inštalácie",
+                        status: "Čaká",
+                        note: "V pondelok ze bude volat. Musi sa dohodnut s najomnikom"
+                    }
+                ]
+            },
+            jakubik: {
+                planData: {},
+                pendingCalls: []
+            }
+        };
+
+        // Aktívne dáta - vždy odkazujú na dáta currentTechnician. Všetky render/save
+        // funkcie nižšie pracujú priamo s týmito dvomi premennými.
+        let planData = ALL_TECH_DATA[currentTechnician].planData;
+        let pendingCalls = ALL_TECH_DATA[currentTechnician].pendingCalls;
+
+        const DAY_NAMES = ['Ne', 'Po', 'Ut', 'St', 'Št', 'Pi', 'So'];
+
+        // Centrálna mapa farieb/kategórií výjazdov.
+        // red/yellow/green/blue = pôvodné plné farby (bez zmeny významu).
+        // green-yellow / green-blue = nové kombinované (polovičaté) kategórie.
+        const COLOR_META = {
+            red:          { hex: '#ef4444', label: '5G',                         badgeClass: 'bg-red-500/20 text-red-400' },
+            yellow:       { hex: '#eab308', label: 'Optika (výstraha objektu)',   badgeClass: 'bg-yellow-500/20 text-yellow-400' },
+            green:        { hex: '#10b981', label: 'Jednoduchá',                  badgeClass: 'bg-emerald-500/20 text-emerald-400' },
+            blue:         { hex: '#3b82f6', label: 'FTTB (výstraha objektu)',     badgeClass: 'bg-blue-500/20 text-blue-400' },
+            'green-yellow': { hex: ['#10b981', '#eab308'], label: 'Jednoduchá optika',        badgeClass: 'bg-gradient-to-r from-emerald-500/20 to-yellow-500/20 text-emerald-300' },
+            'green-blue':   { hex: ['#10b981', '#3b82f6'], label: 'Jednoduchá nová inšt. FTTB+', badgeClass: 'bg-gradient-to-r from-emerald-500/20 to-blue-500/20 text-emerald-300' }
+        };
+
+        function getColorMeta(color) {
+            return COLOR_META[color] || COLOR_META.blue;
+        }
+
+        // Vráti inline style pre 4px farebný okraj vľavo. Pri kombinovaných
+        // farbách rozdelí okraj na hornú a dolnú polovicu (border-image gradient).
+        function colorBorderStyle(color) {
+            const meta = getColorMeta(color);
+            if (Array.isArray(meta.hex)) {
+                return `border-left: 4px solid; border-image: linear-gradient(to bottom, ${meta.hex[0]} 50%, ${meta.hex[1]} 50%) 1;`;
+            }
+            return `border-left: 4px solid ${meta.hex};`;
+        }
+
+        // ===== TIME GAP medzi po sebe idúcimi výjazdmi =====
+        // Gap = rozdiel medzi 'time' (HH:MM) dvoch po sebe idúcich výjazdov v rámci
+        // toho istého dňa. Žiadny odhad trvania výjazdu - len holý rozdiel časov.
+        function timeToMinutes(t) {
+            const [h, m] = t.split(':').map(Number);
+            return h * 60 + (m || 0);
+        }
+
+        function classifyGap(minutes) {
+            if (minutes < 30) return { level: 'critical', label: 'KRITICKÉ', color: '#ef4444', bg: 'bg-red-500/15', text: 'text-red-400', border: 'border-red-500/40' };
+            if (minutes < 60) return { level: 'tight',    label: 'NAPEVNO',  color: '#eab308', bg: 'bg-yellow-500/10', text: 'text-yellow-400', border: 'border-yellow-500/30' };
+            return                 { level: 'ok',         label: 'OK',        color: '#10b981', bg: 'bg-emerald-500/10', text: 'text-emerald-400', border: 'border-emerald-500/20' };
+        }
+
+        function formatGapMinutes(minutes) {
+            if (minutes < 60) return `${minutes} min`;
+            const h = Math.floor(minutes / 60);
+            const m = minutes % 60;
+            return m === 0 ? `${h} h` : `${h} h ${m} min`;
+        }
+
+        // Vráti malý HTML pruh reprezentujúci medzeru medzi dvoma výjazdmi (pre detailný zoznam)
+        function gapRowHtml(minutes) {
+            const g = classifyGap(minutes);
+            const icon = g.level === 'critical' ? 'fa-triangle-exclamation' : g.level === 'tight' ? 'fa-clock' : 'fa-arrow-down';
+            return `
+                <tr class="gap-row">
+                    <td colspan="7" class="py-1 px-3">
+                        <div class="flex items-center gap-x-2 ${g.bg} ${g.border} border rounded px-2 py-1 text-[11px] ${g.text}">
+                            <i class="fa-solid ${icon}"></i>
+                            <span class="font-mono font-bold">${formatGapMinutes(minutes)}</span>
+                            <span class="opacity-70">čas medzi inštaláciami</span>
+                            ${g.level !== 'ok' ? `<span class="ml-auto font-bold tracking-wide">${g.label}</span>` : ''}
+                        </div>
+                    </td>
+                </tr>`;
+        }
+
+        // Kompaktná verzia gap pruhu pre malé bunky hlavnej týždennej tabuľky
+        function gapCardHtml(minutes) {
+            const g = classifyGap(minutes);
+            const icon = g.level === 'critical' ? 'fa-triangle-exclamation' : g.level === 'tight' ? 'fa-clock' : 'fa-arrow-down';
+            return `
+                <div class="flex items-center gap-x-1 ${g.bg} border ${g.border} rounded px-1 py-0.5 my-1 text-[9px] ${g.text} leading-none">
+                    <i class="fa-solid ${icon} text-[8px]"></i>
+                    <span class="font-mono font-bold">${formatGapMinutes(minutes)}</span>
+                    ${g.level !== 'ok' ? `<span class="ml-auto font-bold">${g.label}</span>` : ''}
+                </div>`;
+        }
+
+        function formatDate(d) {
+            const day = DAY_NAMES[d.getDay()];
+            return day + ' ' + d.toLocaleDateString('sk-SK', {day: '2-digit', month: '2-digit'});
+        }
+
+        function formatDateStr(dateStr) {
+            // dateStr vo formáte YYYY-MM-DD
+            const d = new Date(dateStr + 'T00:00:00');
+            const day = DAY_NAMES[d.getDay()];
+            return day + ' ' + dateStr.split('-').reverse().slice(0,2).join('.') + '.';
+        }
+
+        function renderPlan() {
+            const tbody = document.getElementById('plan-body');
+            tbody.innerHTML = '';
+            
+            // Only workdays Mon–Fri
+            const weekDates = [];
+            for (let i = 0; i < 5; i++) {
+                const d = new Date(currentWeekStart);
+                d.setDate(d.getDate() + i);
+                weekDates.push(d);
+            }
+            
+            document.getElementById('week-label').textContent = 
+                formatDate(weekDates[0]) + ' - ' + formatDate(weekDates[4]) + ' (Po–Pi)';
+            
+            const slots = ['6-8', '8-10', '10-12', '12-14', '14-16', '16-18', '18+'];
+            const slotLabels = {'6-8':'6:00–8:00','8-10':'8:00–10:00','10-12':'10:00–12:00','12-14':'12:00–14:00','14-16':'14:00–16:00','16-18':'16:00–18:00','18+':'Po 18:00'};
+
+            weekDates.forEach(date => {
+                const dateStr = date.toISOString().split('T')[0];
+                let row = `<td class="font-mono font-semibold bg-zinc-800">${formatDate(date)}</td>`;
+
+                // Zoraď VŠETKY výjazdy daného dňa chronologicky (cez všetky sloty),
+                // aby gap medzi posledným v jednom slote a prvým v ďalšom slote tiež vyšiel správne.
+                const dayItemsSorted = [];
+                slots.forEach(slot => {
+                    const key = `${dateStr}_${slot}`;
+                    (planData[key] || []).forEach(item => dayItemsSorted.push(item));
+                });
+                dayItemsSorted.sort((a, b) => timeToMinutes(a.time) - timeToMinutes(b.time));
+
+                // Pre každý výjazd si predpočítaj gap k nasledujúcemu (podľa id, nech je rýchle vyhľadanie)
+                const gapAfterId = {};
+                for (let i = 0; i < dayItemsSorted.length - 1; i++) {
+                    const gap = timeToMinutes(dayItemsSorted[i + 1].time) - timeToMinutes(dayItemsSorted[i].time);
+                    if (gap >= 0) gapAfterId[dayItemsSorted[i].id] = gap;
+                }
+
+                slots.forEach(slot => {
+                    const key = `${dateStr}_${slot}`;
+                    const items = planData[key] || [];
+                    
+                    let cell = `<td class="plan-slot" data-slot-label="${slotLabels[slot]}" ${items.length === 0 ? 'data-empty="1"' : ''}>`;
+                    items.forEach(item => {
+                        cell += `
+                            <div class="mb-1 p-1.5 bg-zinc-800 rounded" style="${colorBorderStyle(item.color)}">
+                                <a href="#" onclick="editItem(${item.id}); return false;" class="ticket-link" title="Klikni pre úpravu výjazdu">${item.ticket}</a> 
+                                <span class="time">(${item.time})</span><br>
+                                <span class="text-xs">${item.customer}</span>
+                                <div class="text-[10px] text-zinc-400">${item.note ? item.note.substring(0,45) + '...' : ''}</div>
+                            </div>`;
+                        if (gapAfterId.hasOwnProperty(item.id)) {
+                            cell += gapCardHtml(gapAfterId[item.id]);
+                        }
+                    });
+                    cell += `</td>`;
+                    row += cell;
+                });
+                
+                const tr = document.createElement('tr');
+                tr.innerHTML = row;
+                tbody.appendChild(tr);
+            });
+            
+            renderDetailList();
+        }
+
+        function renderDetailList() {
+            const tbody = document.getElementById('detail-list');
+            tbody.innerHTML = '';
+            
+            const allItems = [];
+            Object.keys(planData).forEach(key => {
+                planData[key].forEach(item => {
+                    const [date] = key.split('_');
+                    allItems.push({...item, date});
+                });
+            });
+            
+            // Sort by date + time
+            allItems.sort((a,b) => (a.date + a.time).localeCompare(b.date + b.time));
+            
+            // Group by date with print button
+            let currentDate = null;
+            
+            allItems.forEach((item, idx) => {
+                if (item.date !== currentDate) {
+                    currentDate = item.date;
+                    const formattedDate = formatDateStr(item.date);
+                    
+                    const dateHeader = document.createElement('tr');
+                    dateHeader.className = 'bg-zinc-800';
+                    dateHeader.innerHTML = `
+                        <td colspan="7" class="py-2 px-3 font-bold text-orange-400 text-sm border-b border-zinc-600 flex justify-between items-center">
+                            <span><i class="fa-solid fa-calendar-day mr-2"></i> ${formattedDate}</span>
+                            <button onclick="printDay('${item.date}')" class="text-[9px] bg-zinc-800 hover:bg-zinc-700 text-orange-400 px-1.5 py-0 rounded border border-zinc-600 flex items-center gap-x-1">
+                                <i class="fa-solid fa-print text-[8px]"></i> <span>Tlačiť</span>
+                            </button>
+                        </td>
+                    `;
+                    tbody.appendChild(dateHeader);
+                } else {
+                    // Rovnaký deň ako predošlý výjazd → vlož vizualizáciu medzery medzi nimi
+                    const prevItem = allItems[idx - 1];
+                    const gapMin = timeToMinutes(item.time) - timeToMinutes(prevItem.time);
+                    if (gapMin >= 0) {
+                        const gapTr = document.createElement('tr');
+                        gapTr.className = 'gap-row';
+                        gapTr.innerHTML = gapRowHtml(gapMin).match(/<td[\s\S]*<\/td>/)[0];
+                        tbody.appendChild(gapTr);
+                    }
+                }
+                
+                const tr = document.createElement('tr');
+                tr.className = 'border-b border-zinc-700 hover:bg-zinc-800';
+                tr.innerHTML = `
+                    <td class="py-2 font-mono text-blue-400 pl-3">${item.ticket}</td>
+                    <td>${item.customer}</td>
+                    <td class="text-xs text-zinc-400">${item.address || ''}</td>
+                    <td class="font-mono">${item.time}</td>
+                    <td><span class="px-2 py-0.5 text-xs rounded ${getColorMeta(item.color).badgeClass}">
+                        ${getColorMeta(item.color).label}
+                    </span></td>
+                    <td class="text-xs">${item.note || ''}</td>
+                    <td class="whitespace-nowrap">
+                        <button onclick="editItem(${item.id})" class="text-blue-400 hover:text-blue-500 mr-2" title="Upraviť výjazd"><i class="fa-solid fa-pen"></i></button>
+                        <button onclick="deleteItem('${item.id}')" class="text-red-400 hover:text-red-500" title="Zmazať výjazd">×</button>
+                    </td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        function deleteItem(id) {
+            if (!confirm('Zmazať tento výjazd z plánu?')) return;
+            
+            Object.keys(planData).forEach(key => {
+                planData[key] = planData[key].filter(i => i.id != id);
+            });
+            renderPlan();
+        }
+
+        // Print clean list for one day only
+        function printDay(date) {
+            const items = [];
+            Object.keys(planData).forEach(key => {
+                if (key.startsWith(date)) {
+                    planData[key].forEach(item => items.push({ ...item, date }));
+                }
+            });
+            
+            items.sort((a, b) => a.time.localeCompare(b.time));
+            
+            let html = `
+                <html>
+                <head>
+                    <title>Rozpis ${date}</title>
+                    <style>
+                        body { font-family: system-ui, sans-serif; padding: 30px; font-size: 14px; }
+                        h1 { font-size: 20px; margin-bottom: 20px; color: #ff9000; }
+                        .item { margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid #eee; }
+                        .time { font-weight: bold; color: #ff9000; }
+                        .customer { font-weight: 600; }
+                    </style>
+                </head>
+                <body>
+                    <h1>Rozpis na ${formatDateStr(date)}</h1>
+            `;
+            
+            if (items.length === 0) {
+                html += `<p>Žiadne výjazdy na tento deň.</p>`;
+            } else {
+                items.forEach(item => {
+                    html += `
+                        <div class="item">
+                            <div><span class="time">${item.time}</span> — <span class="customer">${item.customer}</span></div>
+                            <div style="color:#555; font-size:13px;">${item.address || ''}</div>
+                            <div style="margin-top:4px; font-size:13px;">${item.note || ''}</div>
+                            <div style="margin-top:4px; font-size:12px; color:#888;">
+                                Ticket: ${item.ticket} | ${getColorMeta(item.color).label}
+                            </div>
+                        </div>
+                    `;
+                });
+            }
+            
+            html += `</body></html>`;
+            
+            const w = window.open('', '_blank');
+            w.document.write(html);
+            w.document.close();
+            w.focus();
+            setTimeout(() => w.print(), 400);
+        }
+
+        // Nájde výjazd podľa ID a vráti aj kľúč slotu, v ktorom sa nachádza
+        // (potrebné pri editácii, keď sa zmenou dátumu/času musí výjazd presunúť
+        // do iného slotu v planData).
+        function findPlanItemById(id) {
+            for (const key of Object.keys(planData)) {
+                const idx = planData[key].findIndex(i => i.id == id);
+                if (idx !== -1) return { key, idx, item: planData[key][idx] };
+            }
+            return null;
+        }
+
+        function editItem(id) {
+            const found = findPlanItemById(id);
+            if (!found) { alert('Výjazd sa nenašiel.'); return; }
+            addNewPlanItem(found.item);
+        }
+
+        function addNewPlanItem(existingItem) {
+            const isEdit = !!existingItem;
+            const editDateValue = isEdit ? (findPlanItemById(existingItem.id)?.key.split('_')[0] || '2026-06-23') : '2026-06-23';
+            const modal = document.createElement('div');
+            modal.className = 'fixed inset-0 bg-black/70 flex items-center justify-center z-[200]';
+            modal.innerHTML = `
+                <div class="bg-zinc-900 border border-zinc-700 rounded-2xl w-full max-w-lg p-6" onclick="event.stopImmediatePropagation()">
+                    <div class="font-bold text-xl mb-5 flex items-center gap-x-3">
+                        <i class="fa-solid ${isEdit ? 'fa-pen' : 'fa-plus'} text-orange-400"></i>
+                        <span>${isEdit ? 'Upraviť výjazd' : 'Pridať nový výjazd'}</span>
+                    </div>
+                    
+                    <div class="space-y-4">
+                        <div class="grid grid-cols-2 gap-4">
+                            <div>
+                                <label class="text-xs text-zinc-400 block mb-1">Dátum</label>
+                                <input type="date" id="new-date" value="${editDateValue}" class="bg-zinc-950 border border-zinc-700 w-full p-2.5 rounded-xl">
+                            </div>
+                            <div>
+                                <label class="text-xs text-zinc-400 block mb-1">Čas</label>
+                                <input type="time" id="new-time" value="${isEdit ? existingItem.time : '09:00'}" class="bg-zinc-950 border border-zinc-700 w-full p-2.5 rounded-xl">
+                            </div>
+                        </div>
+                        
+                        <div>
+                            <label class="text-xs text-zinc-400 block mb-1">Ticket číslo</label>
+                            <input type="text" id="new-ticket" value="${isEdit ? (existingItem.ticket === '—' ? '' : existingItem.ticket) : ''}" placeholder="1423186" class="bg-zinc-950 border border-zinc-700 w-full p-2.5 rounded-xl">
+                        </div>
+                        
+                        <div>
+                            <label class="text-xs text-zinc-400 block mb-1">Zákazník</label>
+                            <input type="text" id="new-customer" value="${isEdit ? (existingItem.customer === 'Neznámy' ? '' : existingItem.customer) : ''}" placeholder="Šešera Michal" class="bg-zinc-950 border border-zinc-700 w-full p-2.5 rounded-xl">
+                        </div>
+                        
+                        <div>
+                            <label class="text-xs text-zinc-400 block mb-1">Adresa</label>
+                            <input type="text" id="new-address" value="${isEdit ? (existingItem.address || '') : ''}" placeholder="Krížna 4928/64, 821 08, Bratislava" class="bg-zinc-950 border border-zinc-700 w-full p-2.5 rounded-xl">
+                        </div>
+                        
+                        <div>
+                            <label class="text-xs text-zinc-400 block mb-1">Poznámka / Zadanie</label>
+                            <textarea id="new-note" rows="3" placeholder="Migrácia z 3,7 na 5G + výmena antény" 
+                                class="bg-zinc-950 border border-zinc-700 w-full p-2.5 rounded-xl">${isEdit ? (existingItem.note || '') : ''}</textarea>
+                        </div>
+
+                        <div>
+                            <label class="text-xs text-zinc-400 block mb-1">Kategória / Farba</label>
+                            <select id="new-color" class="bg-zinc-950 border border-zinc-700 w-full p-2.5 rounded-xl">
+                                <option value="red">🔴 Červená - 5G</option>
+                                <option value="yellow">🟡 Žltá - Optika (výstraha objektu / ťahanie kábla)</option>
+                                <option value="green">🟢 Zelená - Jednoduchá</option>
+                                <option value="blue">🔵 Modrá - FTTB (výstraha objektu / ťahanie kábla)</option>
+                                <option value="green-yellow">🟢🟡 Zeleno-žltá - Jednoduchá optika</option>
+                                <option value="green-blue">🟢🔵 Zeleno-modrá - Jednoduchá nová inštalácia FTTB+</option>
+                            </select>
+                        </div>
+                    </div>
+                    
+                    <div class="flex gap-x-3 mt-6">
+                        <button onclick="this.closest('.fixed').remove()" 
+                            class="flex-1 py-2.5 border border-zinc-600 rounded-xl hover:bg-zinc-800">Zrušiť</button>
+                        <button onclick="saveNewPlanItemFromModal(this, ${isEdit ? existingItem.id : 'null'})" 
+                            class="flex-1 py-2.5 bg-orange-500 hover:bg-orange-400 text-black font-bold rounded-xl">${isEdit ? 'Uložiť zmeny' : 'Pridať výjazd'}</button>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(modal);
+            if (isEdit) {
+                // Predvyplň správnu farbu v selecte (atribút value v HTML stringe to nerieši pre <select>)
+                document.getElementById('new-color').value = existingItem.color || 'blue';
+            }
+        }
+
+        function saveNewPlanItemFromModal(btn, editId) {
+            const modal = btn.closest('.fixed');
+            
+            const date = document.getElementById('new-date').value;
+            const time = document.getElementById('new-time').value;
+            const ticket = document.getElementById('new-ticket').value || '—';
+            const customer = document.getElementById('new-customer').value || 'Neznámy';
+            const address = document.getElementById('new-address').value;
+            const note = document.getElementById('new-note').value;
+            const color = document.getElementById('new-color').value;
+            
+            if (!date || !time) {
+                alert("Dátum a čas sú povinné.");
+                return;
+            }
+            
+            const hour = parseInt(time);
+            let slot = '18+';
+            if (hour < 8) slot = '6-8';
+            else if (hour < 10) slot = '8-10';
+            else if (hour < 12) slot = '10-12';
+            else if (hour < 14) slot = '12-14';
+            else if (hour < 16) slot = '14-16';
+            else if (hour < 18) slot = '16-18';
+            
+            const key = `${date}_${slot}`;
+
+            if (editId !== null && editId !== undefined) {
+                // EDITÁCIA existujúceho výjazdu: nájdi ho podľa ID, odstráň zo starého
+                // slotu (mohol sa zmenou dátumu/času zmeniť) a vlož aktualizovaný
+                // na nové miesto - zachová sa pôvodné ID a "team".
+                const found = findPlanItemById(editId);
+                if (found) {
+                    const updatedItem = {
+                        ...found.item,
+                        ticket, customer, address, time, color, note
+                    };
+                    // odstráň zo starého slotu
+                    planData[found.key].splice(found.idx, 1);
+                    if (planData[found.key].length === 0) delete planData[found.key];
+                    // vlož do (prípadne nového) slotu
+                    if (!planData[key]) planData[key] = [];
+                    planData[key].push(updatedItem);
+                }
+            } else {
+                // NOVÝ výjazd
+                if (!planData[key]) planData[key] = [];
+                planData[key].push({
+                    id: Date.now(),
+                    ticket,
+                    customer,
+                    address,
+                    time,
+                    team: currentTechnician === 'jakubik' ? 'Jakubík' : 'Katona',
+                    color: color,
+                    note
+                });
+            }
+            
+            modal.remove();
+            renderPlan();
+        }
+
+        function prevWeek() {
+            currentWeekStart.setDate(currentWeekStart.getDate() - 7);
+            renderPlan();
+        }
+        
+        function nextWeek() {
+            currentWeekStart.setDate(currentWeekStart.getDate() + 7);
+            renderPlan();
+        }
+
+        function exportCSV() {
+            let csv = 'Dátum,Čas,Ticket,Zákazník,Adresa,Tím,Poznámka\n';
+            
+            Object.keys(planData).forEach(key => {
+                const [date, slot] = key.split('_');
+                planData[key].forEach(item => {
+                    csv += `${date},${item.time},${item.ticket},"${item.customer}","${item.address || ''}",Tím ${item.team},"${item.note || ''}"\n`;
+                });
+            });
+            
+            const blob = new Blob([csv], {type: 'text/csv'});
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = `${currentTechnician}_plan_${currentWeekStart.toISOString().slice(0,10)}.csv`;
+            a.click();
+        }
+
+        // ==================== DRUHÁ TABUĽKA: NA ZAVOLANIE ====================
+        // (dáta pendingCalls sú definované vyššie v ALL_TECH_DATA podľa technika)
+
+        function renderPendingCalls() {
+            const tbody = document.getElementById('pending-calls-list');
+            tbody.innerHTML = '';
+
+            // Sort by date
+            const sorted = [...pendingCalls].sort((a,b) => a.date.localeCompare(b.date));
+            
+            let currentDate = null;
+            
+            sorted.forEach(item => {
+                // Add date header
+                if (item.date !== currentDate) {
+                    currentDate = item.date;
+                    const formatted = formatDateStr(item.date);
+                    
+                    const header = document.createElement('tr');
+                    header.className = 'bg-zinc-800';
+                    header.innerHTML = `
+                        <td colspan="7" class="py-1.5 px-3 font-bold text-yellow-400 text-xs border-b border-zinc-600">
+                            <i class="fa-solid fa-calendar mr-2"></i> ${formatted}
+                        </td>
+                    `;
+                    tbody.appendChild(header);
+                }
+                
+                const tr = document.createElement('tr');
+                tr.className = 'border-b border-zinc-700 hover:bg-zinc-800';
+                
+                let statusColor = 'bg-yellow-500/20 text-yellow-400';
+                if (item.status === 'Hotovo') statusColor = 'bg-emerald-500/20 text-emerald-400';
+                if (item.status === 'Odložené') statusColor = 'bg-zinc-500/20 text-zinc-400';
+
+                tr.innerHTML = `
+                    <td class="py-2 font-mono pl-3">${item.date}</td>
+                    <td>${item.person}</td>
+                    <td class="font-mono text-xs">${item.phone}</td>
+                    <td>${item.reason}</td>
+                    <td>
+                        <select onchange="changePendingStatus(${item.id}, this.value)" class="bg-zinc-800 border border-zinc-600 text-xs px-2 py-1 rounded">
+                            <option value="Čaká" ${item.status === 'Čaká' ? 'selected' : ''}>Čaká</option>
+                            <option value="Hotovo" ${item.status === 'Hotovo' ? 'selected' : ''}>Hotovo</option>
+                            <option value="Odložené" ${item.status === 'Odložené' ? 'selected' : ''}>Odložené</option>
+                        </select>
+                    </td>
+                    <td class="text-xs text-zinc-400">${item.note}</td>
+                    <td><button onclick="deletePendingCall(${item.id})" class="text-red-400 hover:text-red-500 text-lg leading-none">×</button></td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        function addPendingCall() {
+            const modal = document.createElement('div');
+            modal.className = 'fixed inset-0 bg-black/70 flex items-center justify-center z-[200]';
+            modal.innerHTML = `
+                <div class="bg-zinc-900 border border-zinc-700 rounded-2xl w-full max-w-lg p-6" onclick="event.stopImmediatePropagation()">
+                    <div class="font-bold text-xl mb-5 flex items-center gap-x-3">
+                        <i class="fa-solid fa-phone text-yellow-400"></i>
+                        <span>Pridať na zavolanie</span>
+                    </div>
+                    
+                    <div class="space-y-4">
+                        <div class="grid grid-cols-2 gap-4">
+                            <div>
+                                <label class="text-xs text-zinc-400 block mb-1">Kedy volať</label>
+                                <input type="date" id="pc-date" value="2026-06-23" class="bg-zinc-950 border border-zinc-700 w-full p-2.5 rounded-xl">
+                            </div>
+                            <div>
+                                <label class="text-xs text-zinc-400 block mb-1">Stav</label>
+                                <select id="pc-status" class="bg-zinc-950 border border-zinc-700 w-full p-2.5 rounded-xl">
+                                    <option value="Čaká">Čaká</option>
+                                    <option value="Hotovo">Hotovo</option>
+                                    <option value="Odložené">Odložené</option>
+                                </select>
+                            </div>
+                        </div>
+                        
+                        <div>
+                            <label class="text-xs text-zinc-400 block mb-1">Komu volať</label>
+                            <input type="text" id="pc-person" placeholder="Najomník / Zákazník" class="bg-zinc-950 border border-zinc-700 w-full p-2.5 rounded-xl">
+                        </div>
+                        
+                        <div>
+                            <label class="text-xs text-zinc-400 block mb-1">Telefón</label>
+                            <input type="text" id="pc-phone" placeholder="+421..." class="bg-zinc-950 border border-zinc-700 w-full p-2.5 rounded-xl">
+                        </div>
+                        
+                        <div>
+                            <label class="text-xs text-zinc-400 block mb-1">Dôvod / Čo riešiť</label>
+                            <input type="text" id="pc-reason" placeholder="Dohodnúť termín výmeny antény" class="bg-zinc-950 border border-zinc-700 w-full p-2.5 rounded-xl">
+                        </div>
+                        
+                        <div>
+                            <label class="text-xs text-zinc-400 block mb-1">Poznámka</label>
+                            <textarea id="pc-note" rows="2" placeholder="V pondelok ze bude volat..." class="bg-zinc-950 border border-zinc-700 w-full p-2.5 rounded-xl"></textarea>
+                        </div>
+                    </div>
+                    
+                    <div class="flex gap-x-3 mt-6">
+                        <button onclick="this.closest('.fixed').remove()" class="flex-1 py-2.5 border border-zinc-600 rounded-xl hover:bg-zinc-800">Zrušiť</button>
+                        <button onclick="savePendingCallFromModal(this)" class="flex-1 py-2.5 bg-yellow-600 hover:bg-yellow-500 text-sm font-bold rounded-xl">Pridať</button>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(modal);
+        }
+
+        function savePendingCallFromModal(btn) {
+            const modal = btn.closest('.fixed');
+            
+            const date = document.getElementById('pc-date').value;
+            const person = document.getElementById('pc-person').value || "Zákazník";
+            const phone = document.getElementById('pc-phone').value || "—";
+            const reason = document.getElementById('pc-reason').value || "Dohodnúť termín";
+            const note = document.getElementById('pc-note').value;
+            const status = document.getElementById('pc-status').value;
+            
+            if (!date || !person) {
+                alert("Dátum a osoba sú povinné.");
+                return;
+            }
+            
+            pendingCalls.push({
+                id: Date.now(),
+                date: date,
+                person: person,
+                phone: phone,
+                reason: reason,
+                status: status,
+                note: note
+            });
+            
+            modal.remove();
+            renderPendingCalls();
+        }
+
+        function changePendingStatus(id, newStatus) {
+            const item = pendingCalls.find(i => i.id == id);
+            if (item) {
+                item.status = newStatus;
+                renderPendingCalls();
+            }
+        }
+
+        function deletePendingCall(id) {
+            if (!confirm("Zmazať túto položku na zavolanie?")) return;
+            // Mutácia in-place (splice), aby premenná pendingCalls neprestala
+            // odkazovať na ALL_TECH_DATA[currentTechnician].pendingCalls.
+            const idx = pendingCalls.findIndex(i => i.id == id);
+            if (idx !== -1) pendingCalls.splice(idx, 1);
+            renderPendingCalls();
+        }
+
+        // (funkcia init je definovaná nižšie, po pridaní exportCurrentState)
+        
+        // ==================== IMPORT Z CUSTOMERS / SWAN ====================
+        function showImportModal() {
+            const modal = document.createElement('div');
+            modal.className = 'fixed inset-0 bg-black/70 flex items-center justify-center z-[200]';
+            modal.innerHTML = `
+                <div class="bg-zinc-900 border border-zinc-700 rounded-2xl w-full max-w-3xl p-6" onclick="event.stopImmediatePropagation()">
+                    <div class="flex justify-between mb-4">
+                        <div class="font-bold text-xl">Prilepiť dump z Customers / SWAN reportu</div>
+                        <button onclick="this.closest('.fixed').remove()" class="text-2xl text-zinc-400 hover:text-white">&times;</button>
+                    </div>
+                    
+                    <textarea id="import-text" rows="12" class="w-full bg-zinc-950 border border-zinc-700 p-4 rounded-xl font-mono text-xs" 
+                        placeholder="Sem prilep celý HTML/text z reporty.php (Customers)..."></textarea>
+                    
+                    <div class="flex justify-end gap-x-3 mt-4">
+                        <button onclick="this.closest('.fixed').remove()" class="px-5 py-2 border border-zinc-600 rounded-xl">Zrušiť</button>
+                        <button onclick="processImport(this)" class="px-6 py-2 bg-blue-600 hover:bg-blue-500 rounded-xl font-bold">SPRACUJ A NAPLŇ</button>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(modal);
+        }
+
+        function processImport(btn) {
+            const text = document.getElementById('import-text').value;
+            if (!text || text.length < 50) {
+                alert("Prilep niečo zmysluplné z Customers.");
+                return;
+            }
+            
+            btn.closest('.fixed').remove();
+            
+            let added = 0;
+            
+            // Extract tickets with dates and times (from the SWAN format)
+            const ticketRegex = /<a href="\/route\/ticket\/(\d+)\/"[^>]*>(\d+)<\/a>[\s\S]{0,200}?<span class="notopen">(\d{2}:\d{2})<\/span>/g;
+            let match;
+            
+            while ((match = ticketRegex.exec(text)) !== null) {
+                const ticketNum = match[1];
+                const time = match[3];
+                
+                // Try to find customer name near it
+                const contextStart = Math.max(0, match.index - 300);
+                const context = text.substring(contextStart, match.index + 400);
+                
+                const customerMatch = context.match(/<a href="\/route\/customer\/\d+"[^>]*>([^<]+)<\/a>/);
+                const addressMatch = context.match(/<a href='\/route\/object\/\d+\/'>([^<]+)<\/a>/);
+                const noteMatch = context.match(/Zadanie:<\/b><\/font>\s*([^<]+)/);
+                
+                const customer = customerMatch ? customerMatch[1] : "Neznámy";
+                const address = addressMatch ? addressMatch[1] : "";
+                const note = noteMatch ? noteMatch[1].trim() : "";
+                
+                // Determine date from context (look for date links)
+                let date = "2026-06-22"; // default
+                const dateMatch = context.match(/show_day=(\d{2}\.\d{2}\.\d{4})/);
+                if (dateMatch) {
+                    const d = dateMatch[1].split('.');
+                    date = `${d[2]}-${d[1]}-${d[0]}`;
+                }
+                
+                // Add to planData
+                const hour = parseInt(time);
+                let slot = '18+';
+                if (hour < 8) slot = '6-8';
+                else if (hour < 10) slot = '8-10';
+                else if (hour < 12) slot = '10-12';
+                else if (hour < 14) slot = '12-14';
+                else if (hour < 16) slot = '14-16';
+                else if (hour < 18) slot = '16-18';
+                
+                const key = `${date}_${slot}`;
+                if (!planData[key]) planData[key] = [];
+                
+                planData[key].push({
+                    id: Date.now() + added,
+                    ticket: ticketNum,
+                    customer: customer,
+                    address: address,
+                    time: time,
+                    team: "Katona",
+                    note: note
+                });
+                added++;
+            }
+            
+            // Also look for the note about calling tenant
+            if (text.toLowerCase().includes('pondelok') && text.toLowerCase().includes('volat')) {
+                const alreadyExists = pendingCalls.some(p => p.note.includes('pondelok'));
+                if (!alreadyExists) {
+                    pendingCalls.push({
+                        id: Date.now(),
+                        date: "2026-06-22",
+                        person: "Najomník",
+                        phone: "—",
+                        reason: "Dohodnúť termín výmeny antény",
+                        status: "Čaká",
+                        note: "V pondelok ze bude volat. Musi sa dohodnut s najomnikom"
+                    });
+                }
+            }
+            
+            renderPlan();
+            renderPendingCalls();
+            
+            alert(`Spracované! Pridaných ${added} výjazdov z dumpu.`);
+        }
+
+        // ==================== ZDIEĽANÉ ÚLOŽISKO (jsonbin.io) ====================
+        // Funguje takto: PC aj mobil ukladajú/čítajú ten istý "bin" (JSON súbor)
+        // na jsonbin.io. Bin ID + API kľúč sa nastaví RAZ na každom zariadení
+        // (tlačidlo "Sync" v hlavičke) a uloží sa do localStorage daného zariadenia.
+        // Dovtedy funguje appka normálne len lokálne (ako predtým).
+        const SYNC_API_BASE = 'https://api.jsonbin.io/v3/b';
+        let syncBinId = localStorage.getItem('cumtomers_bin_id') || '';
+        let syncApiKey = localStorage.getItem('cumtomers_api_key') || '';
+        let syncInProgress = false;
+        let syncPushTimer = null;
+        let pendingPushScheduled = false;
+        let lastSyncedHash = '';
+        let suppressNextPush = false;
+        let cloudHasBeenSeenOnce = false; // true až po prvom úspešnom STIAHNUTÍ z cloudu v tejto relácii
+        let suppressZeroCheck = false; // pri true sa nepýta potvrdenie ani pri ukladaní 0 tiketov
+
+        // Spočíta celkový počet tiketov (cez oboch technikov) v danej dátovej štruktúre.
+        // Používa sa ako poistka: appka nikdy nepošle na cloud stav s podstatne
+        // menej tiketmi, než tam momentálne je, bez explicitného potvrdenia.
+        function countAllTickets(allTechData) {
+            let count = 0;
+            ['katona', 'jakubik'].forEach(tech => {
+                const pd = (allTechData[tech] && allTechData[tech].planData) || {};
+                Object.values(pd).forEach(items => { count += items.length; });
+            });
+            return count;
+        }
+
+        function setSyncStatus(state, text) {
+            const dot = document.querySelector('#sync-status-bar i');
+            const label = document.getElementById('sync-status-text');
+            if (!dot || !label) return;
+            label.textContent = text;
+            dot.className = state === 'ok' ? 'fa-solid fa-circle text-emerald-500' :
+                             state === 'error' ? 'fa-solid fa-triangle-exclamation text-red-500' :
+                             state === 'offline' ? 'fa-solid fa-circle text-zinc-500' :
+                             'fa-solid fa-circle-notch fa-spin text-zinc-400';
+        }
+
+        function hashState() {
+            // Presný hash celého obsahu (nie len dĺžka + začiatok stringu), aby sa
+            // nikdy nestalo, že dva odlišné stavy s podobnou dĺžkou JSON-u vyzerajú
+            // ako identické a appka by tak nesprávne usúdila, že sa nič nezmenilo.
+            return simpleHash(JSON.stringify(ALL_TECH_DATA));
+        }
+
+        function simpleHash(str) {
+            let hash = 0;
+            for (let i = 0; i < str.length; i++) {
+                hash = ((hash << 5) - hash + str.charCodeAt(i)) | 0;
+            }
+            return str.length + ':' + hash;
+        }
+
+        function showSyncSetupModal() {
+            const modal = document.createElement('div');
+            modal.className = 'fixed inset-0 bg-black/70 flex items-center justify-center z-[200]';
+            modal.innerHTML = `
+                <div class="bg-zinc-900 border border-zinc-700 rounded-2xl w-full max-w-lg p-6" onclick="event.stopImmediatePropagation()">
+                    <div class="font-bold text-xl mb-3 flex items-center gap-x-3">
+                        <i class="fa-solid fa-cloud text-orange-400"></i>
+                        <span>Zdieľané úložisko (PC ↔ Mobil)</span>
+                    </div>
+                    <div class="text-xs text-zinc-400 mb-4 leading-relaxed">
+                        Na <b>prvom zariadení</b> klikni "Vytvoriť nové úložisko". Dostaneš Bin ID.<br>
+                        Na <b>druhom zariadení</b> (mobil/PC) sem vlož to isté Bin ID a API kľúč a klikni "Pripojiť".
+                    </div>
+                    <div class="space-y-3">
+                        <div>
+                            <label class="text-xs text-zinc-400 block mb-1">API kľúč (jsonbin.io X-Master-Key)</label>
+                            <input type="text" id="sync-api-key" value="${syncApiKey}" placeholder="vlož API kľúč z jsonbin.io" class="bg-zinc-950 border border-zinc-700 w-full p-2.5 rounded-xl font-mono text-xs">
+                        </div>
+                        <div>
+                            <label class="text-xs text-zinc-400 block mb-1">Bin ID</label>
+                            <input type="text" id="sync-bin-id" value="${syncBinId}" placeholder="napr. 666abc123..." class="bg-zinc-950 border border-zinc-700 w-full p-2.5 rounded-xl font-mono text-xs">
+                        </div>
+                    </div>
+                    <div id="sync-modal-msg" class="text-xs mt-3"></div>
+                    <div class="flex gap-x-3 mt-5">
+                        <button onclick="this.closest('.fixed').remove()" class="flex-1 py-2.5 border border-zinc-600 rounded-xl hover:bg-zinc-800">Zavrieť</button>
+                        <button onclick="createNewBin(this)" class="flex-1 py-2.5 bg-zinc-700 hover:bg-zinc-600 text-sm font-bold rounded-xl">Vytvoriť nové</button>
+                        <button onclick="connectToBin(this)" class="flex-1 py-2.5 bg-orange-500 hover:bg-orange-400 text-black text-sm font-bold rounded-xl">Pripojiť</button>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(modal);
+        }
+
+        async function createNewBin(btn) {
+            const apiKey = document.getElementById('sync-api-key').value.trim();
+            const msg = document.getElementById('sync-modal-msg');
+            if (!apiKey) { msg.innerHTML = '<span class="text-red-400">Vlož API kľúč (zaregistruj sa zdarma na jsonbin.io a skopíruj X-Master-Key).</span>'; return; }
+            msg.innerHTML = '<span class="text-zinc-400">Vytváram...</span>';
+            try {
+                const res = await fetch(SYNC_API_BASE, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Master-Key': apiKey,
                         'X-Bin-Name': 'cumtomers-planner-data',
                         'X-Bin-Versioning': 'true'
                     },
