@@ -1149,9 +1149,11 @@
         let syncApiKey = localStorage.getItem('cumtomers_api_key') || '';
         let syncInProgress = false;
         let syncPushTimer = null;
+        let pendingPushScheduled = false;
         let lastSyncedHash = '';
         let suppressNextPush = false;
         let cloudHasBeenSeenOnce = false; // true až po prvom úspešnom STIAHNUTÍ z cloudu v tejto relácii
+        let suppressZeroCheck = false; // pri true sa nepýta potvrdenie ani pri ukladaní 0 tiketov
 
         // Spočíta celkový počet tiketov (cez oboch technikov) v danej dátovej štruktúre.
         // Používa sa ako poistka: appka nikdy nepošle na cloud stav s podstatne
@@ -1282,33 +1284,32 @@
             if (!syncBinId || !syncApiKey) return;
             if (suppressNextPush) { suppressNextPush = false; return; }
 
-            // POISTKA: pred zápisom najprv over, koľko tiketov je momentálne v cloude.
-            // Ak by nový stav mal výrazne menej tiketov než cloud (napr. cloud má 12,
-            // nový stav má 0-2), niečo je podozrivé - appka sa pred prepísaním spýta.
-            try {
-                const checkRes = await fetch(`${SYNC_API_BASE}/${syncBinId}/latest`, { headers: { 'X-Master-Key': syncApiKey } });
-                if (checkRes.ok) {
-                    const checkData = await checkRes.json();
-                    const cloudCount = countAllTickets(checkData.record || {});
-                    const localCount = countAllTickets(ALL_TECH_DATA);
-                    // Spúšťa sa len ak cloud mal aspoň 3 tikety a nový stav by stratil aspoň polovicu z nich.
-                    if (cloudCount >= 3 && localCount < cloudCount / 2) {
-                        setSyncStatus('error', `Zastavené: cloud má ${cloudCount}, ukladal by sa pokles na ${localCount}`);
-                        const proceed = confirm(
-                            `POZOR: V cloude je momentálne ${cloudCount} tiketov, ale chystáš sa uložiť stav s len ${localCount}.\n\n` +
-                            `Toto vyzerá ako neúmyselná strata dát (napr. appka sa práve načítala bez lokálnej kópie).\n\n` +
-                            `Klikni OK len ak si si ISTÝ, že chceš tieto tikety naozaj zmazať z cloudu.\n` +
-                            `Klikni Zrušiť, ak si tu nechtiac a chceš dáta zachovať (odporúčané).`
-                        );
-                        if (!proceed) {
-                            setSyncStatus('error', 'Uloženie zrušené - dáta v cloude zachované');
-                            return;
+            // Jemná poistka: upozorni len v extrémnom prípade, keď sa appka chystá
+            // vynulovať VŠETKY tikety, kým cloud má ich dosť (typický príznak toho,
+            // že appka sa práve naštartovala skôr, než stihla stiahnuť reálne dáta).
+            // Bežné mazanie jednotlivých výjazdov touto kontrolou neprechádza.
+            const localCount = countAllTickets(ALL_TECH_DATA);
+            if (localCount === 0 && !suppressZeroCheck) {
+                try {
+                    const checkRes = await fetch(`${SYNC_API_BASE}/${syncBinId}/latest`, { headers: { 'X-Master-Key': syncApiKey } });
+                    if (checkRes.ok) {
+                        const checkData = await checkRes.json();
+                        const cloudCount = countAllTickets(checkData.record || {});
+                        if (cloudCount >= 3) {
+                            const proceed = confirm(
+                                `POZOR: Chystáš sa uložiť úplne PRÁZDNY plán (0 tiketov), kým v cloude je momentálne ${cloudCount}.\n\n` +
+                                `Klikni OK len ak si si ISTÝ, že chceš všetky tikety naozaj zmazať.\n` +
+                                `Klikni Zrušiť, ak si tu nechtiac (napr. appka sa práve načítala) - dáta v cloude ostanú zachované.`
+                            );
+                            if (!proceed) {
+                                setSyncStatus('error', 'Uloženie zrušené - dáta v cloude zachované');
+                                return;
+                            }
                         }
                     }
+                } catch (e) {
+                    // Pri výpadku siete pokračuj ďalej, appku tým nezablokujeme.
                 }
-            } catch (e) {
-                // Ak sa nepodarí overiť stav cloudu, pokračuj opatrne ďalej (offline scenár) -
-                // nechceme appku úplne zablokovať pri výpadku siete.
             }
 
             syncInProgress = true;
@@ -1331,6 +1332,9 @@
 
         async function pullFromCloud(silent) {
             if (!syncBinId || !syncApiKey) { setSyncStatus('offline', 'Nepripojené — klikni Sync'); return false; }
+            // Najprv zaruč, že žiadna lokálna zmena nečaká na odoslanie - inak by
+            // sme ňou prepísali to, čo si práve urobil(a) zmazaním/úpravou.
+            await flushPendingPush();
             if (!silent) setSyncStatus('loading', 'Sťahujem...');
             try {
                 const res = await fetch(`${SYNC_API_BASE}/${syncBinId}/latest`, { headers: { 'X-Master-Key': syncApiKey } });
@@ -1375,7 +1379,21 @@
 
         function queuePush() {
             clearTimeout(syncPushTimer);
-            syncPushTimer = setTimeout(pushToCloud, 1200); // debounce — neukladá po každom písmene
+            pendingPushScheduled = true;
+            syncPushTimer = setTimeout(() => { pendingPushScheduled = false; pushToCloud(); }, 1200); // debounce — neukladá po každom písmene
+        }
+
+        // Ak je naplánovaný (debounced) push, ktorý ešte neodišiel, vynúti jeho
+        // OKAMŽITÉ odoslanie a počká na jeho dokončenie. Volá sa pred akýmkoľvek
+        // pullom (manuálny refresh aj pri štarte appky), aby sa nestalo, že pull
+        // stiahne starší stav z cloudu a prepíše ním čerstvo urobenú lokálnu zmenu,
+        // ktorá ešte len čakala na odoslanie.
+        async function flushPendingPush() {
+            if (pendingPushScheduled) {
+                clearTimeout(syncPushTimer);
+                pendingPushScheduled = false;
+                await pushToCloud();
+            }
         }
 
         // Ukladanie dát — lokálne okamžite (rýchle UI) + cloud (zdieľané medzi zariadeniami)
