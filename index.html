@@ -1179,8 +1179,18 @@
         }
 
         function hashState() {
-            const s = JSON.stringify(ALL_TECH_DATA);
-            return s.length + ':' + s.slice(0,40);
+            // Presný hash celého obsahu (nie len dĺžka + začiatok stringu), aby sa
+            // nikdy nestalo, že dva odlišné stavy s podobnou dĺžkou JSON-u vyzerajú
+            // ako identické a appka by tak nesprávne usúdila, že sa nič nezmenilo.
+            return simpleHash(JSON.stringify(ALL_TECH_DATA));
+        }
+
+        function simpleHash(str) {
+            let hash = 0;
+            for (let i = 0; i < str.length; i++) {
+                hash = ((hash << 5) - hash + str.charCodeAt(i)) | 0;
+            }
+            return str.length + ':' + hash;
         }
 
         function showSyncSetupModal() {
@@ -1318,7 +1328,8 @@
                 const res = await fetch(`${SYNC_API_BASE}/${syncBinId}`, {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json', 'X-Master-Key': syncApiKey, 'X-Bin-Versioning': 'true' },
-                    body: JSON.stringify({ katona: ALL_TECH_DATA.katona, jakubik: ALL_TECH_DATA.jakubik, savedAt: new Date().toISOString() })
+                    body: JSON.stringify({ katona: ALL_TECH_DATA.katona, jakubik: ALL_TECH_DATA.jakubik, savedAt: new Date().toISOString() }),
+                    keepalive: true // request prežije aj okamžitý F5/zatvorenie stránky tesne po odoslaní
                 });
                 if (!res.ok) throw new Error('HTTP ' + res.status);
                 lastSyncedHash = hashState();
@@ -1340,8 +1351,7 @@
                 const res = await fetch(`${SYNC_API_BASE}/${syncBinId}/latest`, { headers: { 'X-Master-Key': syncApiKey } });
                 if (!res.ok) throw new Error('HTTP ' + res.status);
                 const data = await res.json();
-                const incomingHash = JSON.stringify({katona: data.record.katona, jakubik: data.record.jakubik}).length + ':' +
-                                      JSON.stringify({katona: data.record.katona, jakubik: data.record.jakubik}).slice(0,40);
+                const incomingHash = simpleHash(JSON.stringify({katona: data.record.katona, jakubik: data.record.jakubik}));
                 if (data.record && incomingHash !== lastSyncedHash && incomingHash !== hashState()) {
                     if (data.record.katona) ALL_TECH_DATA.katona = data.record.katona;
                     if (data.record.jakubik) ALL_TECH_DATA.jakubik = data.record.jakubik;
@@ -1379,13 +1389,17 @@
 
         function queuePush() {
             clearTimeout(syncPushTimer);
+            // Bez debounce zdržania: saveAllData() sa volá len po explicitnej
+            // akcii (klik na Pridať/Uložiť/Zmazať), nie pri každom stlačení
+            // klávesy, takže oneskorenie tu len zvyšuje riziko, že F5/zatvorenie
+            // okna prebehne skôr, než sa zmena odošle na server.
             pendingPushScheduled = true;
-            syncPushTimer = setTimeout(() => { pendingPushScheduled = false; pushToCloud(); }, 1200); // debounce — neukladá po každom písmene
+            syncPushTimer = setTimeout(() => { pendingPushScheduled = false; pushToCloud(); }, 0);
         }
 
-        // Ak je naplánovaný (debounced) push, ktorý ešte neodišiel, vynúti jeho
-        // OKAMŽITÉ odoslanie a počká na jeho dokončenie. Volá sa pred akýmkoľvek
-        // pullom (manuálny refresh aj pri štarte appky), aby sa nestalo, že pull
+        // Ak je naplánovaný push, ktorý ešte neodišiel, vynúti jeho OKAMŽITÉ
+        // odoslanie a počká na jeho dokončenie. Volá sa pred akýmkoľvek pullom
+        // (manuálny refresh aj pri štarte appky), aby sa nestalo, že pull
         // stiahne starší stav z cloudu a prepíše ním čerstvo urobenú lokálnu zmenu,
         // ktorá ešte len čakala na odoslanie.
         async function flushPendingPush() {
@@ -1507,6 +1521,20 @@
 
             console.log('%c[CUMTOMERS] Ready. Sync: ' + (syncBinId ? 'pripojené' : 'lokálne len'), 'color:#ff9000');
         }
+
+        // Posledná poistná vrstva: ak appka zaznamená, že stránka sa zatvára
+        // (F5, zatvorenie tabu, navigácia preč) a ešte je naplánovaný push,
+        // ktorý nestihol odísť, skús ho vystreliť synchrónne ešte raz.
+        // (Hlavné krytie zabezpečuje keepalive:true priamo vo fetch v pushToCloud,
+        // toto je len doplnková záloha pre prípad, že by sa ten request ešte
+        // nestihol ani spustiť.)
+        window.addEventListener('pagehide', function() {
+            if (pendingPushScheduled && syncBinId && syncApiKey) {
+                clearTimeout(syncPushTimer);
+                pendingPushScheduled = false;
+                pushToCloud(); // fire-and-forget s keepalive, nemôžeme tu čakať na await
+            }
+        });
 
         window.onload = init;
     </script>
